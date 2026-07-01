@@ -22,18 +22,25 @@ interface MessagesClient {
 
 export class AnthropicProvider implements ModelProvider {
   private spent = 0;
+  private readonly model: string;
 
   constructor(
     private readonly opts: { model?: string; maxBudgetUsd: number },
     private readonly client: MessagesClient = new Anthropic() as unknown as MessagesClient,
-  ) {}
+  ) {
+    const model = opts.model ?? DEFAULT_MODEL;
+    if (!(model in PRICES)) {
+      throw new Error(`no price data for model "${model}"; known models: ${Object.keys(PRICES).join(", ")}`);
+    }
+    this.model = model;
+  }
 
   spentUsd(): number {
     return this.spent;
   }
 
   async complete<T>({ system, prompt, schema, maxTokens = 4096 }: CompleteOptions<T>): Promise<T> {
-    const model = this.opts.model ?? DEFAULT_MODEL;
+    const model = this.model;
     let lastError = "";
     for (let attempt = 0; attempt < 2; attempt++) {
       if (this.spent >= this.opts.maxBudgetUsd) {
@@ -59,7 +66,7 @@ export class AnthropicProvider implements ModelProvider {
   }
 
   private track(model: string, usage: Usage): void {
-    const price = PRICES[model] ?? PRICES[DEFAULT_MODEL]!;
+    const price = PRICES[model]!;
     this.spent += (usage.input_tokens * price.input + usage.output_tokens * price.output) / 1_000_000;
   }
 }
@@ -67,8 +74,23 @@ export class AnthropicProvider implements ModelProvider {
 function extractJson(text: string): string {
   const start = text.search(/[[{]/);
   if (start === -1) return text;
-  const open = text[start];
-  const close = open === "{" ? "}" : "]";
-  const end = text.lastIndexOf(close);
-  return end > start ? text.slice(start, end + 1) : text;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (escaped) { escaped = false; continue; }
+    if (inString) {
+      if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{" || ch === "[") depth++;
+    else if (ch === "}" || ch === "]") {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return text;
 }

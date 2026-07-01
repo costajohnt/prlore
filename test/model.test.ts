@@ -50,3 +50,31 @@ test("throws BudgetExceededError once spend crosses the cap, before calling the 
   await expect(p.complete({ prompt: "q", schema })).rejects.toThrow(BudgetExceededError);
   expect(create).toHaveBeenCalledTimes(1);
 });
+
+test("extracts JSON when trailing prose contains its own braces", async () => {
+  const { client } = fakeClient([
+    'Here\'s the JSON: {"answer":"yes"}. Does this format {like that} help?',
+  ]);
+  const p = new AnthropicProvider({ maxBudgetUsd: 10 }, client as never);
+  expect(await p.complete({ prompt: "q", schema })).toEqual({ answer: "yes" });
+});
+
+test("extracts a bare JSON array wrapped in prose", async () => {
+  const arraySchema = z.array(z.string());
+  const { client } = fakeClient(['Sure, here: ["a", "b"] enjoy!']);
+  const p = new AnthropicProvider({ maxBudgetUsd: 10 }, client as never);
+  expect(await p.complete({ prompt: "q", schema: arraySchema })).toEqual(["a", "b"]);
+});
+
+test("extracts JSON when a string value contains a closing brace", async () => {
+  const { client } = fakeClient(['prefix noise {"answer":"a}b"} suffix noise']);
+  const p = new AnthropicProvider({ maxBudgetUsd: 10 }, client as never);
+  expect(await p.complete({ prompt: "q", schema })).toEqual({ answer: "a}b" });
+});
+
+test("constructor throws for a model with no price data", () => {
+  const { client } = fakeClient(['{"answer":"a"}']);
+  expect(
+    () => new AnthropicProvider({ model: "claude-nonexistent", maxBudgetUsd: 10 }, client as never),
+  ).toThrow(/no price data/);
+});
