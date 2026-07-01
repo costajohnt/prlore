@@ -13,6 +13,20 @@ test("MineConfig applies spec defaults from minimal input", () => {
   expect(c.model.maxBudgetUsd).toBe(10);
 });
 
+test("MineConfig fills defaults inside partially-provided nested objects", () => {
+  const c = MineConfigSchema.parse({
+    repo: "owner/name",
+    intent: "x",
+    timeRange: { maxPrs: 200 },
+    model: { provider: "sampling" },
+  });
+  expect(c.timeRange.maxPrs).toBe(200);
+  expect(c.timeRange.since).toBeUndefined();
+  expect(c.model.provider).toBe("sampling");
+  expect(c.model.maxBudgetUsd).toBe(10);
+  expect(c.output.layout).toBe("auto"); // fully-omitted parent still defaults
+});
+
 test("MineConfig rejects bad repo and missing intent", () => {
   expect(() => MineConfigSchema.parse({ repo: "not-a-repo", intent: "x" })).toThrow();
   expect(() => MineConfigSchema.parse({ repo: "owner/name" })).toThrow();
