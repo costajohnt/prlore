@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
@@ -38,5 +38,17 @@ test("corrupt cache file reads as miss, never throws", async () => {
   const dir = await mkdtemp(join(tmpdir(), "prlore-xcache-"));
   await writeCache(dir, basePr, "m1", candidates);
   await writeFile(join(dir, "extraction-cache", "7.json"), "{ broken", "utf8");
+  expect(await readCache(dir, basePr, "m1")).toBeNull();
+});
+
+test("valid JSON with the right key but wrong-shaped candidates reads as a miss", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "prlore-xcache-"));
+  await mkdir(join(dir, "extraction-cache"), { recursive: true });
+  const key = cacheKey(basePr, "m1");
+  await writeFile(
+    join(dir, "extraction-cache", "7.json"),
+    JSON.stringify({ key, candidates: [{ statement: 1 }] }),
+    "utf8",
+  );
   expect(await readCache(dir, basePr, "m1")).toBeNull();
 });

@@ -59,20 +59,26 @@ export class Extractor {
   }
 
   private async process(pr: NormalizedPr): Promise<void> {
-    if (this.budgetExhausted) {
-      this.summary.skippedBudget++;
-      return;
-    }
+    // Cache reads are free: check the cache before the budget short-circuit so a
+    // budget trip never discards a candidate that costs nothing to retrieve.
     const cached = await readCache(this.deps.stateDir, pr, this.model);
     if (cached) {
       this.summary.cacheHits++;
       this.collected.push(...cached);
       return;
     }
+    if (this.budgetExhausted) {
+      this.summary.skippedBudget++;
+      return;
+    }
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
         const candidates = await extractOne(pr, this.deps.provider, this.model);
-        await writeCache(this.deps.stateDir, pr, this.model, candidates);
+        try {
+          await writeCache(this.deps.stateDir, pr, this.model, candidates);
+        } catch {
+          // cache write failure is non-fatal: results are still collected, just not cached
+        }
         this.summary.extracted++;
         this.collected.push(...candidates);
         return;

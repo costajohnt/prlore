@@ -2,7 +2,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import type { CompleteOptions, ModelProvider } from "../src/model/provider.js";
+import { BudgetExceededError, type CompleteOptions, type ModelProvider } from "../src/model/provider.js";
 import { appendJsonl } from "../src/state/jsonl.js";
 import { loadCheckpoint, saveCheckpoint } from "../src/state/checkpoint.js";
 import { extractFromCorpus } from "../src/extractor/from-corpus.js";
@@ -46,6 +46,27 @@ test("extracts every valid corpus line, counts drift, flips the stage from extra
   const onDisk = JSON.parse(await readFile(join(stateDir, "candidates.json"), "utf8"));
   expect(onDisk).toHaveLength(2);
   expect((await loadCheckpoint(stateDir))?.stage).toBe("analyzing");
+});
+
+test("a budget-partial run does not flip the stage, so a raised-budget resume can re-run cheaply", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "prlore-fromcorpus-"));
+  const corpus = join(stateDir, "corpus.jsonl");
+  await appendJsonl(corpus, validPr(1));
+  await appendJsonl(corpus, validPr(2));
+  await saveCheckpoint(stateDir, {
+    configHash: "h", stage: "extracting", cursor: null,
+    overflowQueue: [], maxUpdatedAt: null, counters: {},
+  });
+
+  const budgetProvider: ModelProvider = {
+    spentUsd: () => 0,
+    async complete<T>(): Promise<T> {
+      throw new BudgetExceededError(10, 10);
+    },
+  };
+  const s = await extractFromCorpus(stateDir, { provider: budgetProvider });
+  expect(s.skippedBudget).toBeGreaterThan(0);
+  expect((await loadCheckpoint(stateDir))?.stage).toBe("extracting");
 });
 
 test("does not regress a later-stage checkpoint, and tolerates a missing one", async () => {

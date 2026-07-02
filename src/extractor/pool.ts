@@ -4,13 +4,16 @@ export function createLimiter(max: number): <T>(fn: () => Promise<T>) => Promise
   return async <T>(fn: () => Promise<T>): Promise<T> => {
     if (active >= max) {
       await new Promise<void>((resolve) => waiters.push(resolve));
+      // slot handed to us by the releaser; active already accounts for us
+    } else {
+      active++;
     }
-    active++;
     try {
       return await fn();
     } finally {
-      active--;
-      waiters.shift()?.();
+      const next = waiters.shift();
+      if (next) next(); // hand the slot off without decrementing
+      else active--;
     }
   };
 }

@@ -100,6 +100,6 @@ Extract the durable learnings per the rules. JSON only.`;
     category: l.category,
     scope: l.scope ?? defaultScope(pr.files),
     polarity: l.polarity,
-    evidence: l.quotes.map((q) => ({ pr: pr.number, ...q })),
+    evidence: l.quotes.map((q) => ({ ...q, pr: pr.number })),
   }));
 }

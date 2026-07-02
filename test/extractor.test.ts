@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
@@ -66,6 +66,49 @@ test("createLimiter caps concurrency", async () => {
   expect(maxSeen).toBe(2);
 });
 
+test("createLimiter hands slots off without a barge-in window under streaming interleave", async () => {
+  // For each microtask-tick offset, fill the cap, enqueue one more caller than
+  // capacity (a genuine waiter — mirrors streaming, where more work is enqueued
+  // than the concurrency cap), release one active task, then — at that tick
+  // offset — issue a brand-new call. The old release path (`active--` then wake)
+  // left a window between the decrement and the woken waiter's own `active++`
+  // where a fresh caller could slip in and push concurrency past the cap.
+  const cap = 2;
+  for (let ticks = 0; ticks <= 6; ticks++) {
+    const limit = createLimiter(cap);
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const release: (() => void)[] = [];
+    const start = () =>
+      limit(async () => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise<void>((resolve) => release.push(resolve));
+        inFlight--;
+      });
+
+    const p1 = start();
+    const p2 = start(); // fills the cap
+    const p3 = start(); // more work than capacity: a genuine waiter
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    release.shift()!(); // release one slot, waking the waiter
+    for (let i = 0; i < ticks; i++) await Promise.resolve();
+    const p4 = start(); // a fresh call landing during the handoff window
+
+    const all = [p1, p2, p3, p4];
+    let done = false;
+    void Promise.all(all).then(() => (done = true));
+    for (let guard = 0; !done && guard < 10_000; guard++) {
+      if (release.length) release.shift()!();
+      await Promise.resolve();
+    }
+    await Promise.all(all);
+
+    expect(maxInFlight).toBeLessThanOrEqual(cap);
+  }
+});
+
 test("extracts, caches, and a re-enqueued identical PR after drain is a cache hit on a NEW extractor", async () => {
   const stateDir = await dir();
   const { p, stats } = provider(() => "ok");
@@ -102,6 +145,34 @@ test("persistent failure retries 3x then skips; run still succeeds", async () =>
   const s = await x.drain();
   expect(s).toMatchObject({ failed: 2, extracted: 0, candidates: 0 });
   expect(stats().calls).toBe(6); // 3 attempts each
+});
+
+test("writeCache failure is non-fatal: extraction still counts, candidate still collected, no retry", async () => {
+  const stateDir = await dir();
+  // Make the cache dir uncreatable: a plain file sits where writeCache wants a directory.
+  await writeFile(join(stateDir, "extraction-cache"), "not a directory", "utf8");
+  const { p, stats } = provider(() => "ok");
+  const x = new Extractor({ provider: p, stateDir });
+  x.enqueue(pr(40));
+  const s = await x.drain();
+  expect(s).toMatchObject({ extracted: 1, failed: 0, candidates: 1 });
+  expect(stats().calls).toBe(1); // no retry paid for the cache-write failure
+});
+
+test("budget exhaustion does not skip a free cache hit", async () => {
+  const stateDir = await dir();
+  // Warm the cache for PR A with a successful run.
+  const warm = provider(() => "ok");
+  const warmup = new Extractor({ provider: warm.p, stateDir });
+  warmup.enqueue(pr(50));
+  await warmup.drain();
+
+  const tripper = provider(() => "budget");
+  const x = new Extractor({ provider: tripper.p, stateDir, concurrency: 1 });
+  x.enqueue(pr(51)); // B: needs a provider call, trips the budget
+  x.enqueue(pr(50)); // A: cached, must still be collected for free post-trip
+  const s = await x.drain();
+  expect(s).toMatchObject({ cacheHits: 1, skippedBudget: 1, failed: 0, candidates: 1 });
 });
 
 test("budget exhaustion stops later work without provider calls", async () => {
