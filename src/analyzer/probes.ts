@@ -2,7 +2,7 @@ import type { Migration } from "../schemas/patterns-model.js";
 import type { GitRunner } from "./git.js";
 
 export async function grepCount(git: GitRunner, repoPath: string, token: string): Promise<number> {
-  const out = await git(["grep", "-F", "-c", token], repoPath);
+  const out = await git(["grep", "-F", "-c", "-e", token], repoPath);
   return out
     .split("\n")
     .map((l) => l.trim())

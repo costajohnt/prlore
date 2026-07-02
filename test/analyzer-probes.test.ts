@@ -7,9 +7,14 @@ const NOW = new Date("2026-07-01T00:00:00Z").getTime();
 
 test("grepCount counts matching lines across files, 0 when absent", async () => {
   const repo = await buildFixtureRepo();
-  expect(await grepCount(realGit, repo, "oldApi")).toBe(5); // 1 import line + 1 legacy + 1 app.ts call... see fixture
+  expect(await grepCount(realGit, repo, "oldApi")).toBe(5); // 2 jquery-widget + 1 util + 1 import + 1 call in app.ts = 5
   expect(await grepCount(realGit, repo, "newApi")).toBe(7);
   expect(await grepCount(realGit, repo, "definitelyNotInRepo_xyz")).toBe(0);
+});
+
+test("grepCount handles dash-prefixed tokens without treating them as flags", async () => {
+  const repo = await buildFixtureRepo();
+  expect(await grepCount(realGit, repo, "--definitely-not-a-flag")).toBe(0);
 });
 
 test("pickaxeCount buckets commits by date", async () => {
