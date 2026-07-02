@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { chmod, readFile } from "node:fs/promises";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -74,8 +74,13 @@ test("analyze composes collectors, LLM draft, and probe verification into a vali
 
 test("analyze works without stateDir and skips unreadable exemplars", async () => {
   const repo = await buildFixtureRepo();
-  const { provider } = fakeProvider(draft);
+  await chmod(join(repo, "legacy/util.js"), 0o000);
+  const { provider, prompts } = fakeProvider(draft);
   const config = MineConfigSchema.parse({ repo: "o/r", intent: "x" });
   const model = await analyze(repo, config, { provider, now: () => NOW });
   expect(model.areas.length).toBeGreaterThan(0);
+  // the readable exemplar text made it into the prompt...
+  expect(prompts[0]).toContain('newApi("button")');
+  // ...but the unreadable file's unique content did not
+  expect(prompts[0]).not.toContain("helper()");
 });
