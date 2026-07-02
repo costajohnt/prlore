@@ -31,7 +31,7 @@ async function write(repo: string, path: string, content: string): Promise<void>
  *  2024-06: src/app.ts mixes oldApi (2) + newApi (1)
  *  2026-05: src/components/button.ts newApi; app.ts drops one oldApi
  *  2026-06: src/components/input.ts newApi; manifests + CODEOWNERS + eslint
- * HEAD occurrence totals: oldApi = 4 (3 legacy + 1 app.ts), newApi = 4.
+ * HEAD occurrence totals: oldApi = 5 (2 legacy jquery + 1 legacy util + 1 import + 1 app.ts call), newApi = 7 (1 import + 2 app.ts calls + 2 button + 2 input).
  */
 export async function buildFixtureRepo(): Promise<string> {
   const repo = await mkdtemp(join(tmpdir(), "prlore-fixture-"));
