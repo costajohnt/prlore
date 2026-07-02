@@ -4,12 +4,13 @@ import { readJsonl } from "./jsonl.js";
 export async function readCorpus(
   path: string,
 ): Promise<{ prs: NormalizedPr[]; drifted: number }> {
+  let invalidSeq = 0;
   const raw = await readJsonl<unknown>(
     path,
     (r) => r,
     (r) => {
       const n = (r as { number?: unknown } | null)?.number;
-      return typeof n === "number" ? n : -1; // invalid lines share a bucket; dropped below
+      return typeof n === "number" ? n : `invalid-${invalidSeq++}`; // unique key per invalid line
     },
   );
   const prs: NormalizedPr[] = [];

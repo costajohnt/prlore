@@ -33,6 +33,16 @@ test("readCorpus returns valid PRs and counts drifted lines instead of throwing"
   expect(drifted).toBe(1);
 });
 
+test("readCorpus counts every drifted line lacking a numeric number", async () => {
+  const file = join(await mkdtemp(join(tmpdir(), "prlore-corpus-")), "corpus.jsonl");
+  await appendJsonl(file, validPr(1));
+  await appendJsonl(file, { oops: true });
+  await appendJsonl(file, "just a string");
+  const { prs, drifted } = await readCorpus(file);
+  expect(prs.map((p) => p.number)).toEqual([1]);
+  expect(drifted).toBe(2);
+});
+
 test("readCorpus dedups by PR number, last write wins", async () => {
   const file = join(await mkdtemp(join(tmpdir(), "prlore-corpus-")), "corpus.jsonl");
   await appendJsonl(file, validPr(1));
