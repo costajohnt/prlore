@@ -59,6 +59,7 @@ export function renderPrDiscussion(pr: NormalizedPr): string {
   return full.slice(0, DISCUSSION_CAP) + TRUNCATION_MARKER;
 }
 
+// Scope = immediate parent directory of each file ("src/net/**", not "src/**"). The plan's reference code said top-level dirs but its own test pinned parent-dir semantics; parent-dir wins: narrower scopes are more informative for reconciliation.
 function defaultScope(files: string[]): string[] {
   const dirs = new Set<string>();
   for (const f of files) {
@@ -72,6 +73,7 @@ function defaultScope(files: string[]): string[] {
 export async function extractOne(
   pr: NormalizedPr,
   provider: ModelProvider,
+  // Unused here; part of the stable signature — Task 3 threads it through for cache keying.
   model?: string,
 ): Promise<CandidateLearning[]> {
   const prompt = `## PR #${pr.number}: ${pr.title}
