@@ -156,12 +156,13 @@ test("presence-contradicts: proscriptive claim probed against a falling-but-pres
 test("no-probe proposal outside {corroborated, unobservable} demotes to unobservable; missing proposal defaults to unobservable", async () => {
   const c0 = mkCluster(0, "prefer composition");
   const c1 = mkCluster(1, "no proposal for this one");
+  const c2 = mkCluster(2, "another cluster with no proposal");
   const draft: Draft = {
     proposals: [{ clusterId: 0, proposedVerdict: "contradicted-stable" }],
   };
-  const { p } = fakeProvider(draft);
+  const { p, callCount } = fakeProvider(draft);
 
-  const rules = await reconcileClusters([c0, c1], [], emptyPatterns, {
+  const rules = await reconcileClusters([c0, c1, c2], [], emptyPatterns, {
     provider: p,
     git: realGit,
     repoPath: await buildFixtureRepo(),
@@ -170,6 +171,35 @@ test("no-probe proposal outside {corroborated, unobservable} demotes to unobserv
 
   expect(rules.find((r) => r.id === 0)!.verdict).toBe("unobservable");
   expect(rules.find((r) => r.id === 1)!.verdict).toBe("unobservable");
+  expect(rules.find((r) => r.id === 2)!.verdict).toBe("unobservable");
+  expect(callCount()).toBe(1); // binding contract: ONE LLM call for all clusters
+});
+
+test("provider throw: no exception escapes; every cluster falls back to unobservable", async () => {
+  const clusters = [
+    mkCluster(0, "use tabs"),
+    mkCluster(1, "never use var", { polarity: "proscriptive" }),
+    mkCluster(2, "prefer composition"),
+  ];
+  const throwing: ModelProvider = {
+    spentUsd: () => 0,
+    async complete<T>(): Promise<T> {
+      throw new Error("model unavailable");
+    },
+  };
+
+  const rules = await reconcileClusters(clusters, [], emptyPatterns, {
+    provider: throwing,
+    git: realGit,
+    repoPath: await buildFixtureRepo(),
+    now,
+  });
+
+  expect(rules).toHaveLength(3);
+  for (const r of rules) {
+    expect(r.verdict).toBe("unobservable"); // no-proposal default path
+    expect(r.probeResult).toBeUndefined();
+  }
 });
 
 // ---- Behavior 5: conflict pairs -------------------------------------------
