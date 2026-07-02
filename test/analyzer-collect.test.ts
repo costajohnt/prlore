@@ -1,7 +1,11 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { expect, test } from "vitest";
 import { realGit } from "../src/analyzer/git.js";
 import { collectHistory, parseCodeowners } from "../src/analyzer/collect.js";
 import { buildFixtureRepo } from "./helpers/fixture-repo.js";
+
+const run = promisify(execFile);
 
 test("collectHistory computes lastTouched, commitCount, and recency percentiles", async () => {
   const repo = await buildFixtureRepo();
@@ -28,7 +32,24 @@ test("collectHistory computes lastTouched, commitCount, and recency percentiles"
 
 test("collectHistory ignores files deleted before HEAD", async () => {
   const repo = await buildFixtureRepo();
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "Fixture",
+    GIT_AUTHOR_EMAIL: "fixture@example.com",
+    GIT_COMMITTER_NAME: "Fixture",
+    GIT_COMMITTER_EMAIL: "fixture@example.com",
+    GIT_AUTHOR_DATE: "2026-06-15T12:00:00Z",
+    GIT_COMMITTER_DATE: "2026-06-15T12:00:00Z",
+  };
+  await run("git", ["rm", "-q", "legacy/util.js"], { cwd: repo, env });
+  await run("git", ["commit", "-q", "-m", "drop legacy util"], { cwd: repo, env });
+
   const h = await collectHistory(realGit, repo);
+
+  expect(h.files).not.toContain("legacy/util.js");
+  expect(h.commitCount.has("legacy/util.js")).toBe(false);
+  expect(h.lastTouched.has("legacy/util.js")).toBe(false);
+  expect(h.commitCount.get("src/app.ts")).toBe(2);
   for (const f of h.commitCount.keys()) {
     expect(h.files).toContain(f);
   }
