@@ -22,10 +22,12 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.109.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@octokit/graphql": "^9.0.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^26.1.0",
+    "msw": "^2.14.6",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9"
   }
