@@ -4,7 +4,7 @@ export interface RawActor {
   login: string;
   __typename: string;
 }
-interface RawPageInfo {
+export interface RawPageInfo {
   hasNextPage: boolean;
 }
 export interface RawComment {
