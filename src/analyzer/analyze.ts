@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { ModelProvider } from "../model/provider.js";
 import type { MineConfig } from "../schemas/mine-config.js";
 import { PatternsModelSchema, type PatternsModel } from "../schemas/patterns-model.js";
-import { collectHistory, parseCodeowners } from "./collect.js";
+import { collectHistory, ownersForPath, parseCodeowners } from "./collect.js";
 import { detectAreas, pickExemplars } from "./areas.js";
 import { collectTooling } from "./tooling.js";
 import { realGit, type GitRunner } from "./git.js";
@@ -108,22 +108,18 @@ token pairs.`;
   const migrations = await verifyMigrations(git, repoPath, draft.migrationCandidates, now);
 
   const descriptions = new Map(draft.areaDescriptions.map((d) => [d.path, d.description]));
-  const ownersFor = (areaPath: string): string[] | undefined => {
-    const entry = owners.find((o) => {
-      const p = o.pattern.replace(/\/$/, "");
-      return areaPath === p || areaPath.startsWith(`${p}/`);
-    });
-    return entry?.owners;
-  };
 
   const model: PatternsModel = PatternsModelSchema.parse({
-    areas: areas.map((a) => ({
-      path: a.path,
-      stack: a.stack,
-      recencyScore: a.recencyScore,
-      ...(ownersFor(a.path) ? { owners: ownersFor(a.path) } : {}),
-      description: descriptions.get(a.path) ?? "",
-    })),
+    areas: areas.map((a) => {
+      const own = ownersForPath(owners, a.path);
+      return {
+        path: a.path,
+        stack: a.stack,
+        recencyScore: a.recencyScore,
+        ...(own ? { owners: own } : {}),
+        description: descriptions.get(a.path) ?? "",
+      };
+    }),
     patterns: draft.patterns,
     migrations,
     meta,

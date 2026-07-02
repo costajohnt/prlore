@@ -1,7 +1,13 @@
+import { execFile } from "node:child_process";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { promisify } from "node:util";
 import { expect, test } from "vitest";
 import { realGit } from "../src/analyzer/git.js";
 import { grepCount, pickaxeCount, verifyMigrations } from "../src/analyzer/probes.js";
 import { buildFixtureRepo } from "./helpers/fixture-repo.js";
+
+const run = promisify(execFile);
 
 const NOW = new Date("2026-07-01T00:00:00Z").getTime();
 
@@ -10,6 +16,25 @@ test("grepCount counts matching lines across files, 0 when absent", async () => 
   expect(await grepCount(realGit, repo, "oldApi")).toBe(5); // 2 jquery-widget + 1 util + 1 import + 1 call in app.ts = 5
   expect(await grepCount(realGit, repo, "newApi")).toBe(7);
   expect(await grepCount(realGit, repo, "definitelyNotInRepo_xyz")).toBe(0);
+});
+
+test("grepCount excludes pathspecs so emitted docs don't keep migrations alive forever", async () => {
+  const repo = await buildFixtureRepo();
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "Fixture",
+    GIT_AUTHOR_EMAIL: "fixture@example.com",
+    GIT_COMMITTER_NAME: "Fixture",
+    GIT_COMMITTER_EMAIL: "fixture@example.com",
+    GIT_AUTHOR_DATE: "2026-06-15T12:00:00Z",
+    GIT_COMMITTER_DATE: "2026-06-15T12:00:00Z",
+  };
+  await writeFile(join(repo, "AGENTS.md"), "This repo still references oldApi in one place.\n", "utf8");
+  await run("git", ["add", "-A"], { cwd: repo, env });
+  await run("git", ["commit", "-q", "-m", "add AGENTS.md"], { cwd: repo, env });
+
+  expect(await grepCount(realGit, repo, "oldApi")).toBe(6);
+  expect(await grepCount(realGit, repo, "oldApi", ["AGENTS.md"])).toBe(5);
 });
 
 test("grepCount handles dash-prefixed tokens without treating them as flags", async () => {

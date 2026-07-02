@@ -28,7 +28,12 @@ export function detectAreas(history: History, opts: { minFiles?: number } = {}):
   for (const f of history.files) {
     const key = areaKey(f);
     if (key === ".") continue;
-    groups.set(key, [...(groups.get(key) ?? []), f]);
+    let group = groups.get(key);
+    if (!group) {
+      group = [];
+      groups.set(key, group);
+    }
+    group.push(f);
   }
 
   const areas: Area[] = [];

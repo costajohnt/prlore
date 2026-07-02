@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { expect, test } from "vitest";
 import { realGit } from "../src/analyzer/git.js";
-import { collectHistory, parseCodeowners } from "../src/analyzer/collect.js";
+import { collectHistory, ownersForPath, parseCodeowners } from "../src/analyzer/collect.js";
 import { buildFixtureRepo } from "./helpers/fixture-repo.js";
 
 const run = promisify(execFile);
@@ -62,4 +62,29 @@ test("parseCodeowners extracts patterns and owners, skipping comments/blanks", (
     { pattern: "legacy/", owners: ["@carol"] },
     { pattern: "*.md", owners: ["@docs-team"] },
   ]);
+});
+
+test("ownersForPath: * catch-all matches any path", () => {
+  const entries = [{ pattern: "*", owners: ["@everyone"] }];
+  expect(ownersForPath(entries, "src/components")).toEqual(["@everyone"]);
+  expect(ownersForPath(entries, "legacy")).toEqual(["@everyone"]);
+});
+
+test("ownersForPath: leading-slash pattern anchors and still matches by area-prefix", () => {
+  const entries = [{ pattern: "/src/", owners: ["@root-src"] }];
+  expect(ownersForPath(entries, "src/components")).toEqual(["@root-src"]);
+});
+
+test("ownersForPath: nested override, last-match-wins", () => {
+  const entries = [
+    { pattern: "src/", owners: ["@alice"] },
+    { pattern: "src/components/", owners: ["@bob"] },
+  ];
+  expect(ownersForPath(entries, "src/components")).toEqual(["@bob"]);
+  expect(ownersForPath(entries, "src/util")).toEqual(["@alice"]);
+});
+
+test("ownersForPath: no match returns undefined", () => {
+  const entries = [{ pattern: "src/", owners: ["@alice"] }];
+  expect(ownersForPath(entries, "docs")).toBeUndefined();
 });

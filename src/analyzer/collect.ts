@@ -30,11 +30,21 @@ export async function collectHistory(git: GitRunner, repoPath: string): Promise<
 
   const files = [...tracked];
   const touchTimes = files.map((f) => lastTouched.get(f) ?? 0);
+  const sorted = [...touchTimes].sort((a, b) => a - b);
+  const lowerBound = (t: number): number => {
+    let lo = 0;
+    let hi = sorted.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (sorted[mid]! < t) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  };
   const recencyPercentile = new Map<string, number>();
   for (const f of files) {
     const mine = lastTouched.get(f) ?? 0;
-    const below = touchTimes.filter((t) => t < mine).length;
-    recencyPercentile.set(f, files.length > 1 ? below / (files.length - 1) : 0);
+    recencyPercentile.set(f, files.length > 1 ? lowerBound(mine) / (files.length - 1) : 0);
   }
 
   return { files, lastTouched, commitCount, recencyPercentile };
@@ -49,4 +59,23 @@ export function parseCodeowners(content: string): { pattern: string; owners: str
     if (pattern && owners.length > 0) entries.push({ pattern, owners });
   }
   return entries;
+}
+
+/**
+ * GitHub CODEOWNERS matching semantics: last matching entry wins, `*` matches
+ * everything, and a leading `/` (repo-root anchor) is stripped since we only
+ * match against area-relative paths.
+ */
+export function ownersForPath(
+  entries: { pattern: string; owners: string[] }[],
+  areaPath: string,
+): string[] | undefined {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const raw = entries[i]!;
+    const p = raw.pattern.replace(/^\//, "").replace(/\/$/, "");
+    if (p === "*" || areaPath === p || areaPath.startsWith(`${p}/`)) {
+      return raw.owners.length > 0 ? raw.owners : undefined;
+    }
+  }
+  return undefined;
 }
