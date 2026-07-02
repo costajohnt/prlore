@@ -123,6 +123,42 @@ test("line-budget trim keeps estimate <= 400 lines by dropping the lowest-score 
   expect(Math.min(...survivingScores)).toBeGreaterThan(Math.max(...trimmedScores)); // highest scores kept
 });
 
+// ---- Behavior 3b: provider-throw fallback ---------------------------------
+
+test("provider throw: planDoc degrades to a deterministic score-desc plan that still respects the line budget", async () => {
+  const rules: RuleRecord[] = [];
+  for (let i = 0; i < 500; i++) {
+    rules.push(mkRule(`r${i}`, i / 500));
+  }
+  const throwing: ModelProvider = {
+    spentUsd: () => 0,
+    async complete<T>(): Promise<T> {
+      throw new Error("model unavailable");
+    },
+  };
+
+  const plan = await planDoc(rules, "intent", emptyAreas, throwing);
+
+  expect(plan.title).toBe("Project conventions");
+  expect(plan.perArea).toBe(false);
+  expect(plan.sections).toHaveLength(1);
+  expect(plan.sections[0]!.heading).toBe("Conventions");
+
+  const estimate = 6 + plan.sections.reduce((sum, s) => sum + 3 + s.ruleIds.length, 0);
+  expect(estimate).toBeLessThanOrEqual(400); // budget trim still applies to the fallback
+
+  const surviving = plan.sections[0]!.ruleIds;
+  const scoreById = new Map(rules.map((r) => [r.id, r.score]));
+  const survivingScores = surviving.map((id) => scoreById.get(id)!);
+  for (let i = 1; i < survivingScores.length; i++) {
+    expect(survivingScores[i]!).toBeLessThanOrEqual(survivingScores[i - 1]!); // score-desc order
+  }
+  const survivingSet = new Set(surviving);
+  const trimmedScores = rules.filter((r) => !survivingSet.has(r.id)).map((r) => r.score);
+  expect(trimmedScores.length).toBeGreaterThan(0);
+  expect(Math.min(...survivingScores)).toBeGreaterThan(Math.max(...trimmedScores)); // top scores kept
+});
+
 // ---- Behavior 4: prompt carries intent verbatim + rule ids ---------------
 
 test("planDoc's prompt carries the intent verbatim and each rule line carries its id", async () => {

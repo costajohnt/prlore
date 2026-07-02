@@ -110,18 +110,35 @@ function enforce(draft: DocPlan, rules: RuleRecord[]): DocPlan {
   return { ...draft, sections: trimmed };
 }
 
+// Deterministic degradation, mirroring cluster/reconcile: if the model is unavailable at this
+// last step, emit a single score-desc section rather than failing after all the expensive work.
+function fallbackDraft(rules: RuleRecord[]): DocPlan {
+  const ruleIds = [...rules].sort((a, b) => b.score - a.score).map((r) => r.id);
+  return {
+    title: "Project conventions",
+    overview: "",
+    sections: [{ heading: "Conventions", ruleIds }],
+    perArea: false,
+  };
+}
+
 export async function planDoc(
   rules: RuleRecord[],
   intent: string,
   areas: PatternsModel["areas"],
   provider: ModelProvider,
 ): Promise<DocPlan> {
-  const draft = await provider.complete({
-    system: SYSTEM,
-    prompt: buildPrompt(rules, intent, areas),
-    schema: DocPlanSchema,
-    maxTokens: 4096,
-  });
+  let draft: DocPlan;
+  try {
+    draft = await provider.complete({
+      system: SYSTEM,
+      prompt: buildPrompt(rules, intent, areas),
+      schema: DocPlanSchema,
+      maxTokens: 4096,
+    });
+  } catch {
+    draft = fallbackDraft(rules);
+  }
 
   return enforce(draft, rules);
 }
