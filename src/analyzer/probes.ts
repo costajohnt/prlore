@@ -39,6 +39,25 @@ export async function pickaxeCount(
 
 const MONTH_MS = 30 * 86400_000;
 
+export async function trendFor(
+  git: GitRunner,
+  repoPath: string,
+  token: string,
+  now: () => number,
+  excludes?: string[],
+): Promise<{ head: number; recent: number; prior: number; trend: "rising" | "falling" | "flat" }> {
+  const t = now();
+  const twelveMonthsAgo = new Date(t - 12 * MONTH_MS).toISOString();
+  const thirtySixMonthsAgo = new Date(t - 36 * MONTH_MS).toISOString();
+  const [head, recent, prior] = await Promise.all([
+    grepCount(git, repoPath, token, excludes),
+    pickaxeCount(git, repoPath, token, twelveMonthsAgo, undefined, excludes),
+    pickaxeCount(git, repoPath, token, thirtySixMonthsAgo, twelveMonthsAgo, excludes),
+  ]);
+  const trend = recent < prior ? "falling" : recent > prior ? "rising" : "flat";
+  return { head, recent, prior, trend };
+}
+
 export async function verifyMigrations(
   git: GitRunner,
   repoPath: string,
@@ -48,20 +67,10 @@ export async function verifyMigrations(
 ): Promise<Migration[]> {
   const migrations: Migration[] = [];
   for (const { from, to } of candidates) {
-    const [oldCount, newCount] = await Promise.all([
-      grepCount(git, repoPath, from, excludes),
-      grepCount(git, repoPath, to, excludes),
-    ]);
+    const newCount = await grepCount(git, repoPath, to, excludes);
     if (newCount === 0) continue; // destination absent → not a migration
 
-    const t = now();
-    const twelveMonthsAgo = new Date(t - 12 * MONTH_MS).toISOString();
-    const thirtySixMonthsAgo = new Date(t - 36 * MONTH_MS).toISOString();
-    const [recent, prior] = await Promise.all([
-      pickaxeCount(git, repoPath, from, twelveMonthsAgo, undefined, excludes),
-      pickaxeCount(git, repoPath, from, thirtySixMonthsAgo, twelveMonthsAgo, excludes),
-    ]);
-    const trend = recent < prior ? "falling" : recent > prior ? "rising" : "flat";
+    const { head: oldCount, trend } = await trendFor(git, repoPath, from, now, excludes);
 
     migrations.push({
       from,
