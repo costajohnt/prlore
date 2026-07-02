@@ -1,4 +1,3 @@
-import { mkdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { realGit, type GitRunner } from "../analyzer/git.js";
 import type { ModelProvider } from "../model/provider.js";
@@ -13,6 +12,7 @@ import {
   type Provenance,
   type RuleRecord,
 } from "../schemas/provenance.js";
+import { atomicWriteFile } from "../state/atomic.js";
 import { loadCheckpoint, saveCheckpoint } from "../state/checkpoint.js";
 import { clusterCandidates } from "./cluster.js";
 import { mergeCodeOnlyPatterns, reconcileClusters, type ReconciledRule } from "./reconcile.js";
@@ -100,12 +100,6 @@ function singleContestedItem(rule: ReconciledRule): ContestedItem {
   };
 }
 
-async function atomicWrite(path: string, content: string): Promise<void> {
-  const tmp = path + ".tmp";
-  await writeFile(tmp, content, "utf8");
-  await rename(tmp, path); // atomic on POSIX: readers never see a half-written file
-}
-
 export async function synthesize(
   config: MineConfig,
   patterns: PatternsModel,
@@ -173,9 +167,8 @@ export async function synthesize(
   });
 
   if (stateDir) {
-    await mkdir(stateDir, { recursive: true });
-    await atomicWrite(join(stateDir, "draft.md"), draft);
-    await atomicWrite(join(stateDir, "provenance.json"), JSON.stringify(provenance, null, 2));
+    await atomicWriteFile(join(stateDir, "draft.md"), draft);
+    await atomicWriteFile(join(stateDir, "provenance.json"), JSON.stringify(provenance, null, 2));
 
     // Guarded stage flip: advance from "analyzing" OR "synthesizing" — synthesize
     // owns the analyzing->synthesizing->ready-for-preview transition, but upstream

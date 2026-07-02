@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { CandidateLearningSchema, type CandidateLearning } from "../schemas/candidate-learning.js";
 import type { NormalizedPr } from "../schemas/normalized-pr.js";
+import { atomicWriteFile } from "../state/atomic.js";
 import { EXTRACTOR_PROMPT_VERSION } from "./extract-one.js";
 
 const EntrySchema = z.object({ key: z.string(), candidates: z.array(CandidateLearningSchema) });
@@ -39,8 +40,5 @@ export async function writeCache(
   candidates: CandidateLearning[],
 ): Promise<void> {
   const path = cachePath(stateDir, pr);
-  await mkdir(join(stateDir, "extraction-cache"), { recursive: true });
-  const tmp = `${path}.tmp`;
-  await writeFile(tmp, JSON.stringify({ key: cacheKey(pr, model), candidates }), "utf8");
-  await rename(tmp, path);
+  await atomicWriteFile(path, JSON.stringify({ key: cacheKey(pr, model), candidates }));
 }

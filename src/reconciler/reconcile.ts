@@ -4,6 +4,7 @@ import { trendFor } from "../analyzer/probes.js";
 import { BudgetExceededError, type ModelProvider } from "../model/provider.js";
 import type { PatternsModel } from "../schemas/patterns-model.js";
 import type { EvidenceRecord, Verdict } from "../schemas/provenance.js";
+import { MONTH_MS } from "../util/time.js";
 import type { Cluster } from "./cluster.js";
 import { scoreRule } from "./score.js";
 
@@ -43,7 +44,6 @@ import, config key, etc.), supply probeToken (the exact token to search for) and
 "presence-supports" if the token's presence in the code supports the claim, "presence-contradicts"
 if the claim asserts the token should NOT appear. Respond with ONLY JSON matching the schema.`;
 
-const MONTH_MS = 30 * 86_400_000;
 const HIGH_AUTHORITY = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 const CONTESTED_SCORE_THRESHOLD = 0.3;
 

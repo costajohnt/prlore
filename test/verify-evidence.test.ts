@@ -154,6 +154,112 @@ test("an unverified (non-matching) quote keeps the model's untrusted claimed val
   expect(e.createdAt).toBe("2020-01-01T00:00:00Z");
 });
 
+// ---- Hardening: blockquote stripping + highest-authority attribution -----
+
+test("a blockquoted echo of an OWNER statement by a NONE-association part does not attribute to the echoer; attributes to the OWNER's own part", () => {
+  const ownerStatement = "please always use X for every widget we ship";
+  const prs: NormalizedPr[] = [{
+    number: 1, title: "t", body: "unrelated", author: "a", authorAssociation: "MEMBER",
+    state: "MERGED", mergedAt: null, updatedAt: "2026-01-01T00:00:00Z", labels: [], files: [],
+    threads: [{
+      path: null, line: null, resolved: true,
+      // This comment appears EARLIER in corpus iteration order than the owner's own
+      // comment below, so a naive first-match would (wrongly) attribute to it.
+      comments: [{ author: "echoer", association: "NONE", body: `> ${ownerStatement}\n\nagreed, +1`, createdAt: "2026-01-02T00:00:00Z" }],
+    }],
+    reviews: [],
+    comments: [{ author: "owner1", association: "OWNER", body: ownerStatement, createdAt: "2026-01-01T12:00:00Z" }],
+  }];
+  const candidate: CandidateLearning = {
+    statement: "Use X", category: "style", scope: [], polarity: "prescriptive",
+    evidence: [{ pr: 1, author: "owner1", association: "OWNER", quote: ownerStatement, createdAt: "2026-01-01T12:00:00Z" }],
+  };
+
+  const [out] = verifyEvidence([candidate], prs);
+  const e = out!.evidence[0]!;
+
+  expect(e.verified).toBe(true);
+  expect(e.association).toBe("OWNER");
+  expect(e.author).toBe("owner1");
+});
+
+test("an OWNER blockquoting a drive-by's claim to disagree does not mint OWNER authority for it; attributes to the drive-by's own part", () => {
+  const claim = "we should never use X, it always breaks everything";
+  const prs: NormalizedPr[] = [{
+    number: 1, title: "t", body: "unrelated", author: "a", authorAssociation: "MEMBER",
+    state: "MERGED", mergedAt: null, updatedAt: "2026-01-01T00:00:00Z", labels: [], files: [],
+    threads: [],
+    reviews: [],
+    // Owner's disagreement (which blockquotes the claim) appears FIRST in iteration
+    // order, so a naive first-match (without stripping) would wrongly mint OWNER
+    // authority for the drive-by's claim.
+    comments: [
+      { author: "owner1", association: "OWNER", body: `> ${claim}\n\nThat's not accurate, we've been using X safely for months.`, createdAt: "2026-01-02T00:00:00Z" },
+      { author: "driveby", association: "NONE", body: claim, createdAt: "2026-01-01T00:00:00Z" },
+    ],
+  }];
+  const candidate: CandidateLearning = {
+    statement: "Avoid X", category: "style", scope: [], polarity: "proscriptive",
+    evidence: [{ pr: 1, author: "driveby", association: "NONE", quote: claim, createdAt: "2026-01-01T00:00:00Z" }],
+  };
+
+  const [out] = verifyEvidence([candidate], prs);
+  const e = out!.evidence[0]!;
+
+  expect(e.verified).toBe(true);
+  expect(e.association).toBe("NONE");
+  expect(e.author).toBe("driveby");
+});
+
+test("when multiple parts genuinely contain the quote (no blockquotes involved), the highest-authority match wins regardless of order", () => {
+  const quote = "we always run the full suite before merging";
+  const prs: NormalizedPr[] = [{
+    number: 1, title: "t", body: "unrelated", author: "a", authorAssociation: "MEMBER",
+    state: "MERGED", mergedAt: null, updatedAt: "2026-01-01T00:00:00Z", labels: [], files: [],
+    threads: [],
+    reviews: [],
+    comments: [
+      { author: "contributor1", association: "CONTRIBUTOR", body: quote, createdAt: "2026-01-01T00:00:00Z" },
+      { author: "owner1", association: "OWNER", body: quote, createdAt: "2026-01-02T00:00:00Z" },
+    ],
+  }];
+  const candidate: CandidateLearning = {
+    statement: "Run full suite", category: "testing", scope: [], polarity: "prescriptive",
+    evidence: [{ pr: 1, author: "contributor1", association: "CONTRIBUTOR", quote, createdAt: "2026-01-01T00:00:00Z" }],
+  };
+
+  const [out] = verifyEvidence([candidate], prs);
+  const e = out!.evidence[0]!;
+
+  expect(e.verified).toBe(true);
+  expect(e.association).toBe("OWNER");
+  expect(e.author).toBe("owner1");
+});
+
+test("ties in authority resolve to the earliest matching part", () => {
+  const quote = "we always squash commits before merge";
+  const prs: NormalizedPr[] = [{
+    number: 1, title: "t", body: "unrelated", author: "a", authorAssociation: "MEMBER",
+    state: "MERGED", mergedAt: null, updatedAt: "2026-01-01T00:00:00Z", labels: [], files: [],
+    threads: [],
+    reviews: [],
+    comments: [
+      { author: "owner-early", association: "OWNER", body: quote, createdAt: "2026-01-01T00:00:00Z" },
+      { author: "owner-late", association: "OWNER", body: quote, createdAt: "2026-01-05T00:00:00Z" },
+    ],
+  }];
+  const candidate: CandidateLearning = {
+    statement: "Squash commits", category: "process", scope: [], polarity: "prescriptive",
+    evidence: [{ pr: 1, author: "owner-early", association: "OWNER", quote, createdAt: "2026-01-01T00:00:00Z" }],
+  };
+
+  const [out] = verifyEvidence([candidate], prs);
+  const e = out!.evidence[0]!;
+
+  expect(e.author).toBe("owner-early");
+  expect(e.createdAt).toBe("2026-01-01T00:00:00Z");
+});
+
 test("provenance schemas round-trip and reject bad verdicts", () => {
   const rule = {
     id: "r1", statement: "Use X", category: "style", polarity: "prescriptive", scope: [],

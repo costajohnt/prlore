@@ -326,6 +326,39 @@ test("Fix 7: sanitizer applies to rationale, title, overview, section heading, a
   expect(out).toContain("statement ## boom — reason  x");
 });
 
+// ---- Hardening: EOF normalization + trending-away [fading] prefix ---------
+
+test("renderDraft output ends with exactly one trailing newline when it ends in a contested section", () => {
+  const { plan, rules, contested } = smallPlanFixture();
+
+  const out = renderDraft(plan, rules, contested, baseConfig);
+
+  expect(out.endsWith("\n")).toBe(true);
+  expect(out.endsWith("\n\n")).toBe(false);
+});
+
+test("renderDraft output ends with exactly one trailing newline when there is no contested section", () => {
+  const { plan, rules } = smallPlanFixture();
+
+  const out = renderDraft(plan, rules, [], baseConfig);
+
+  expect(out.endsWith("\n")).toBe(true);
+  expect(out.endsWith("\n\n")).toBe(false);
+});
+
+test("renderDraft prefixes a surviving trending-away rule with [fading], analogous to the migration-in-progress prefix", () => {
+  const fading = mkRule("r5", 0.5, {
+    statement: "use the old cache client",
+    verdict: "trending-away",
+    evidence: [ev({ pr: 8 })],
+  });
+  const plan: DocPlan = { title: "T", overview: "o", perArea: false, sections: [{ heading: "Core", ruleIds: ["r5"] }] };
+
+  const out = renderDraft(plan, [fading], [], baseConfig);
+
+  expect(out).toContain("- **[fading]** use the old cache client");
+});
+
 // ---- Behavior 6: sidecar-only mode ----------------------------------------
 
 test("sidecar-only citations mode never emits inline citation parens", () => {

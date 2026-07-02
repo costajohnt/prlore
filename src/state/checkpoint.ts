@@ -1,15 +1,12 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { CheckpointSchema, type Checkpoint } from "../schemas/checkpoint.js";
+import { atomicWriteFile } from "./atomic.js";
 
 const FILE = "checkpoint.json";
 
 export async function saveCheckpoint(stateDir: string, cp: Checkpoint): Promise<void> {
-  await mkdir(stateDir, { recursive: true });
-  const path = join(stateDir, FILE);
-  const tmp = path + ".tmp";
-  await writeFile(tmp, JSON.stringify(cp, null, 2), "utf8");
-  await rename(tmp, path); // atomic on POSIX: readers never see a half-written file
+  await atomicWriteFile(join(stateDir, FILE), JSON.stringify(cp, null, 2));
 }
 
 export async function loadCheckpoint(

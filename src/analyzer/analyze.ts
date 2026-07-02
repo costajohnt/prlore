@@ -1,9 +1,10 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import type { ModelProvider } from "../model/provider.js";
 import type { MineConfig } from "../schemas/mine-config.js";
 import { PatternsModelSchema, type PatternsModel } from "../schemas/patterns-model.js";
+import { atomicWriteFile } from "../state/atomic.js";
 import { collectHistory, ownersForPath, parseCodeowners } from "./collect.js";
 import { detectAreas, pickExemplars } from "./areas.js";
 import { collectTooling } from "./tooling.js";
@@ -126,11 +127,7 @@ token pairs.`;
   });
 
   if (deps.stateDir) {
-    await mkdir(deps.stateDir, { recursive: true });
-    const path = join(deps.stateDir, "patterns.json");
-    const tmp = `${path}.tmp`;
-    await writeFile(tmp, JSON.stringify(model, null, 2), "utf8");
-    await rename(tmp, path);
+    await atomicWriteFile(join(deps.stateDir, "patterns.json"), JSON.stringify(model, null, 2));
   }
   return model;
 }

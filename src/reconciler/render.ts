@@ -36,7 +36,9 @@ function renderBullet(rule: RuleRecord, config: MineConfig): string {
   const statement = sanitize(rule.statement);
   const prefix = rule.verdict === "trending-toward"
     ? `- **[migration in progress]** ${statement}`
-    : `- **${statement}**`;
+    : rule.verdict === "trending-away"
+      ? `- **[fading]** ${statement}` // survived scoring but is on its way out — must not read as settled
+      : `- **${statement}**`;
   const rationale = rule.rationale ? ` — ${sanitize(rule.rationale)}` : "";
   const citations = citationsFor(rule, config);
   return `${prefix}${rationale}${citations}`;
@@ -74,5 +76,7 @@ export function renderDraft(
     }
   }
 
-  return lines.join("\n");
+  // Normalize EOF to exactly one trailing newline, regardless of how the last
+  // section/contested-block left the lines array.
+  return lines.join("\n").replace(/\n+$/, "") + "\n";
 }

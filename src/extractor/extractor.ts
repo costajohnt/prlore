@@ -1,8 +1,8 @@
-import { mkdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { BudgetExceededError, type ModelProvider } from "../model/provider.js";
 import type { CandidateLearning } from "../schemas/candidate-learning.js";
 import type { NormalizedPr } from "../schemas/normalized-pr.js";
+import { atomicWriteFile } from "../state/atomic.js";
 import { extractOne } from "./extract-one.js";
 import { readCache, writeCache } from "./cache.js";
 import { createLimiter } from "./pool.js";
@@ -97,10 +97,7 @@ export class Extractor {
     this.drained ??= (async () => {
       await Promise.all(this.tasks);
       const path = join(this.deps.stateDir, "candidates.json");
-      await mkdir(this.deps.stateDir, { recursive: true });
-      const tmp = `${path}.tmp`;
-      await writeFile(tmp, JSON.stringify(this.collected, null, 2), "utf8");
-      await rename(tmp, path);
+      await atomicWriteFile(path, JSON.stringify(this.collected, null, 2));
       this.summary.candidates = this.collected.length;
       return this.summary;
     })();

@@ -1,4 +1,5 @@
 import type { Migration } from "../schemas/patterns-model.js";
+import { MONTH_MS } from "../util/time.js";
 import type { GitRunner } from "./git.js";
 
 function excludePathspecs(excludes?: string[]): string[] {
@@ -36,8 +37,6 @@ export async function pickaxeCount(
   const out = await git(args, repoPath);
   return out.split("\n").filter((l) => l.trim()).length;
 }
-
-const MONTH_MS = 30 * 86400_000;
 
 export async function trendFor(
   git: GitRunner,
