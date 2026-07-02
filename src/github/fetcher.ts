@@ -14,6 +14,11 @@ export interface FetchDeps {
   transport: GqlTransport;
   throttle: Throttle;
   stateDir: string;
+  /**
+   * Best-effort streaming hook: fires at-least-once per kept PR (resume re-fires re-processed
+   * pages); overflow PRs are delivered only once, complete, after their refetch; corpus.jsonl is
+   * the source of truth.
+   */
   onPr?: (pr: NormalizedPr) => void;
 }
 
@@ -125,7 +130,7 @@ export async function fetchCorpus(config: MineConfig, deps: FetchDeps): Promise<
         const result = normalizePr(node, ingest);
         if (result.kept) {
           await appendJsonl(corpusPath, result.pr);
-          deps.onPr?.(result.pr);
+          if (!result.needsOverflow) deps.onPr?.(result.pr);
           bump(cp, "kept");
           if (result.needsOverflow && !cp.overflowQueue.includes(result.pr.number)) {
             cp.overflowQueue.push(result.pr.number);
@@ -173,8 +178,10 @@ export async function fetchCorpus(config: MineConfig, deps: FetchDeps): Promise<
     await saveCheckpoint(deps.stateDir, cp);
   }
 
-  cp.stage = "extracting";
-  await saveCheckpoint(deps.stateDir, cp);
+  if (cp.stage === "fetching") {
+    cp.stage = "extracting";
+    await saveCheckpoint(deps.stateDir, cp);
+  }
 
   const { drifted } = await readCorpus(corpusPath);
   return {

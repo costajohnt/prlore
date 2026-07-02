@@ -177,7 +177,16 @@ test("overflow queue round-trip", async () => {
   const { transport } = fakeTransport([page1], perPrResponses);
   const { stateDir } = await freshDeps();
 
-  const summary = await fetchCorpus(config, { transport, throttle: quietThrottle(), stateDir });
+  const delivered: { number: number; comments: number }[] = [];
+  const onPr = (pr: { number: number; threads: { comments: unknown[] }[] }) =>
+    delivered.push({ number: pr.number, comments: pr.threads[0]?.comments.length ?? 0 });
+
+  const summary = await fetchCorpus(config, {
+    transport,
+    throttle: quietThrottle(),
+    stateDir,
+    onPr: onPr as never,
+  });
 
   const { prs } = await readCorpus(join(stateDir, "corpus.jsonl"));
   const pr7 = prs.find((p) => p.number === 7);
@@ -186,6 +195,10 @@ test("overflow queue round-trip", async () => {
 
   const finalCp = await loadCheckpoint(stateDir);
   expect(finalCp?.overflowQueue).toEqual([]);
+
+  const pr7Deliveries = delivered.filter((d) => d.number === 7);
+  expect(pr7Deliveries).toHaveLength(1);
+  expect(pr7Deliveries[0]!.comments).toBe(3);
 });
 
 test("resume from checkpoint", async () => {
@@ -358,6 +371,40 @@ test("since stop", async () => {
   const { prs } = await readCorpus(join(stateDir, "corpus.jsonl"));
   expect(prs).toHaveLength(1);
   expect(prs[0]!.number).toBe(1);
+});
+
+test("does not regress a later-stage checkpoint when re-invoked", async () => {
+  const config = mkConfig();
+  const { stateDir } = await freshDeps();
+
+  const cp: Checkpoint = {
+    configHash: configHash(config),
+    stage: "synthesizing",
+    cursor: null,
+    overflowQueue: [],
+    maxUpdatedAt: "2026-06-01T00:00:00Z",
+    counters: { fetched: 4, kept: 4, dropped: 0 },
+  };
+  await saveCheckpoint(stateDir, cp);
+
+  const transport = (async (query: string) => {
+    if (query.includes("preflight")) {
+      return { viewer: { login: "me" }, repository: { nameWithOwner: "o/r" } };
+    }
+    throw new Error("should not be called");
+  }) as GqlTransport;
+  const calls: string[] = [];
+  const countingTransport = (async (query: string, variables: Record<string, unknown>) => {
+    calls.push(query);
+    return transport(query, variables);
+  }) as GqlTransport;
+
+  await fetchCorpus(config, { transport: countingTransport, throttle: quietThrottle(), stateDir });
+
+  expect(calls).toHaveLength(1);
+
+  const finalCp = await loadCheckpoint(stateDir);
+  expect(finalCp?.stage).toBe("synthesizing");
 });
 
 test("preflight failure aborts before any state write", async () => {

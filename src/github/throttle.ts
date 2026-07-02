@@ -22,7 +22,9 @@ export class Throttle {
 
   constructor(opts: ThrottleOpts = {}) {
     this.pointsPerMinute = opts.pointsPerMinute ?? 1600;
-    this.minRemaining = opts.minRemaining ?? 100;
+    // A single fetch page (files/reviews/comments/threads all first-page'd) costs ~180 points,
+    // so a floor of 100 could let the next page start and then get rejected mid-flight.
+    this.minRemaining = opts.minRemaining ?? 400;
     this.now = opts.now ?? Date.now;
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   }

@@ -46,27 +46,60 @@ export function makeTransport(token: string, baseUrl?: string): GqlTransport {
 interface RetryOpts {
   maxAttempts?: number;
   sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
 }
 
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-function retryAfterMs(err: unknown): number | null {
-  const e = err as { status?: number; response?: { headers?: Record<string, string> } };
-  if (e?.status !== 403 && e?.status !== 429) return null;
-  const header = e.response?.headers?.["retry-after"];
-  const seconds = header ? Number(header) : 60;
-  return (Number.isFinite(seconds) ? seconds : 60) * 1000 + Math.floor(Math.random() * 1000);
+// GitHub's primary GraphQL rate limit is signaled two ways:
+//   (a) HTTP 403/429 with a "retry-after" header on the response (secondary rate limit / abuse detection).
+//   (b) HTTP 200 with an `errors` array containing `{ type: "RATE_LIMITED" }` -- this is what
+//       @octokit/graphql throws as a GraphqlResponseError, which has no `.status` and carries its
+//       response headers at `err.headers` (not `err.response.headers`).
+function retryAfterMs(err: unknown, now: () => number): number | null {
+  const e = err as {
+    status?: number;
+    response?: { headers?: Record<string, string> };
+    headers?: Record<string, string>;
+    errors?: Array<{ type?: string } | null | undefined>;
+  };
+  const jitter = Math.floor(Math.random() * 1000);
+
+  if (e?.status === 403 || e?.status === 429) {
+    const header = e.response?.headers?.["retry-after"];
+    const seconds = header ? Number(header) : 60;
+    return (Number.isFinite(seconds) ? seconds : 60) * 1000 + jitter;
+  }
+
+  if (Array.isArray(e?.errors) && e.errors.some((entry) => entry?.type === "RATE_LIMITED")) {
+    const headers = e.headers ?? {};
+    const retryAfter = headers["retry-after"];
+    if (retryAfter !== undefined) {
+      const seconds = Number(retryAfter);
+      return (Number.isFinite(seconds) ? seconds : 60) * 1000 + jitter;
+    }
+    const reset = headers["x-ratelimit-reset"];
+    if (reset !== undefined) {
+      const resetSeconds = Number(reset);
+      if (Number.isFinite(resetSeconds)) {
+        return Math.max(resetSeconds * 1000 - now(), 0) + jitter;
+      }
+    }
+    return 60_000 + jitter;
+  }
+
+  return null;
 }
 
 export function withRetry(transport: GqlTransport, opts: RetryOpts = {}): GqlTransport {
-  const { maxAttempts = 3, sleep = defaultSleep } = opts;
+  const { maxAttempts = 3, sleep = defaultSleep, now = Date.now } = opts;
   return async <T>(query: string, variables: Record<string, unknown>): Promise<T> => {
     let lastErr: unknown;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         return await transport<T>(query, variables);
       } catch (err) {
-        const wait = retryAfterMs(err);
+        const wait = retryAfterMs(err, now);
         if (wait === null) throw err;
         lastErr = err;
         if (attempt < maxAttempts) await sleep(wait);

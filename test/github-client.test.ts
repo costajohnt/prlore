@@ -1,4 +1,4 @@
-import { expect, test, vi } from "vitest";
+import { expect, test } from "vitest";
 import { setupServer } from "msw/node";
 import { HttpResponse, http } from "msw";
 import {
@@ -85,6 +85,49 @@ test("withRetry gives up after 3 attempts and rethrows non-rate errors immediate
     "schema error",
   );
   expect(plainCalls).toBe(1);
+});
+
+test("withRetry retries a primary RATE_LIMITED GraphqlResponseError using x-ratelimit-reset", async () => {
+  const sleeps: number[] = [];
+  let calls = 0;
+  const flaky = (async () => {
+    calls++;
+    if (calls === 1) {
+      const err = {
+        errors: [{ type: "RATE_LIMITED" }],
+        headers: { "x-ratelimit-reset": "5" },
+      };
+      throw err;
+    }
+    return { ok: true };
+  }) as unknown as Parameters<typeof withRetry>[0];
+  const wrapped = withRetry(flaky, {
+    sleep: async (ms) => void sleeps.push(ms),
+    now: () => 0,
+  });
+  expect(await wrapped("query {}", {})).toEqual({ ok: true });
+  expect(calls).toBe(2);
+  expect(sleeps[0]).toBeGreaterThanOrEqual(5000);
+});
+
+test("withRetry falls back to a 60s wait for a RATE_LIMITED error with no reset header", async () => {
+  const sleeps: number[] = [];
+  let calls = 0;
+  const flaky = (async () => {
+    calls++;
+    if (calls === 1) {
+      const err = { errors: [{ type: "RATE_LIMITED" }], headers: {} };
+      throw err;
+    }
+    return { ok: true };
+  }) as unknown as Parameters<typeof withRetry>[0];
+  const wrapped = withRetry(flaky, {
+    sleep: async (ms) => void sleeps.push(ms),
+    now: () => 0,
+  });
+  expect(await wrapped("query {}", {})).toEqual({ ok: true });
+  expect(calls).toBe(2);
+  expect(sleeps[0]).toBeGreaterThanOrEqual(60000);
 });
 
 test("preflight throws PreflightError when the repository is inaccessible", async () => {
