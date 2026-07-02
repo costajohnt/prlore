@@ -41,11 +41,20 @@ export function recurrenceOf(evidence: EvidenceRecord[]): number {
 }
 
 export function recencyOf(evidence: EvidenceRecord[], now: number): number {
+  // Only VERIFIED evidence may drive recency: unverified entries keep the model's
+  // claimed createdAt (verification never corrected it), so counting them would let
+  // a fabricated "dated today" entry reset the decay clock — the one spoofable
+  // scoring factor authority/recurrence already guard against. Unverified-only
+  // rules get recency 1, which is harmless: their score is already capped at
+  // drive-by authority (0.25) x recurrence (0.5) = 0.125 < INCLUDE_THRESHOLD.
   // Unparseable createdAt values (garbage/corrupted dates) must never poison the
   // max: Math.max(0, NaN, ...) === NaN, which would propagate into scoreRule and
-  // crash every downstream sort/threshold check. Filter them out first, then treat
+  // crash every downstream sort/threshold check. Filter them out too, then treat
   // "nothing left" the same as "no dated evidence" (synthetic rules) — no decay.
-  const times = evidence.map((e) => new Date(e.createdAt).getTime()).filter((t) => !Number.isNaN(t));
+  const times = evidence
+    .filter((e) => e.verified)
+    .map((e) => new Date(e.createdAt).getTime())
+    .filter((t) => !Number.isNaN(t));
   const newest = Math.max(0, ...times);
   if (newest === 0) return 1; // no dated evidence (synthetic rules) — no decay
   const ageMonths = Math.max(0, (now - newest) / MONTH_MS);

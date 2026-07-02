@@ -281,6 +281,24 @@ test("Fix 7: an HTML comment marker in a statement is stripped so it can't close
   expect(out).toContain("close it  prlore:end  then more");
 });
 
+test("Fix 7 re-review: nested markers that reassemble after one strip are removed to fixpoint", () => {
+  // Single-pass bypass: stripping the inner "<!--" / "-->" from this string
+  // reassembles the outer characters into a fresh "<!-- prlore:end -->".
+  const injected = mkRule("r1", 0.9, { statement: "pwn <<!--!-- prlore:end ---->> done" });
+  const plan: DocPlan = { title: "T", overview: "o", perArea: false, sections: [{ heading: "Core", ruleIds: ["r1"] }] };
+
+  const out = renderDraft(plan, [injected], [], baseConfig);
+
+  // Only the ONE static generator-header marker survives anywhere in the doc.
+  expect(out.split("<!--").length - 1).toBe(1);
+  expect(out.split("-->").length - 1).toBe(1);
+  // And specifically the rendered bullet line carries NO marker at all.
+  const bullet = out.split("\n").find((l) => l.includes("pwn"))!;
+  expect(bullet).not.toContain("<!--");
+  expect(bullet).not.toContain("-->");
+  expect(bullet).not.toContain("<!-- prlore:end -->");
+});
+
 test("Fix 7: sanitizer applies to rationale, title, overview, section heading, and contested statement/reason", () => {
   const rule = mkRule("r1", 0.9, { statement: "clean", rationale: "bad\n## heading in rationale" });
   const plan: DocPlan = {

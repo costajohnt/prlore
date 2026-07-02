@@ -62,6 +62,27 @@ test("recency: an unparseable createdAt is filtered out, not treated as the newe
   expect(Number.isFinite(mixed)).toBe(true);
 });
 
+// ---- Re-review: recency is computed from VERIFIED evidence only -----------
+
+test("recency: a fabricated unverified entry dated now cannot reset the decay clock — verified date wins", () => {
+  const staleVerified = ev({ association: "OWNER", createdAt: "2024-07-01T00:00:00Z", verified: true }); // ~2 years old
+  const fabricatedFresh = ev({ createdAt: "2026-07-01T00:00:00Z", verified: false }); // model-claimed, never corroborated
+
+  const r = recencyOf([staleVerified, fabricatedFresh], NOW);
+  // Computed from the VERIFIED 2024 date: ~24.3 thirty-day months at half-life 12 -> ~0.245.
+  // Pre-fix failure mode: the unverified "now" entry wins the max and yields ~1.
+  expect(r).toBeLessThan(0.3);
+  expect(r).toBeCloseTo(recencyOf([staleVerified], NOW), 6); // identical to verified-only input
+});
+
+test("recency: unverified-only evidence gets recency 1 (harmless — score caps below threshold anyway)", () => {
+  const unverified = [ev({ association: "OWNER", createdAt: "2026-07-01T00:00:00Z", verified: false })];
+  expect(recencyOf(unverified, NOW)).toBe(1);
+  // drive-by authority (0.25) x recurrence (0.5, unverified PRs don't count) x 1 x 1 = 0.125
+  expect(scoreRule(unverified, "corroborated", NOW)).toBeCloseTo(0.125, 3);
+  expect(scoreRule(unverified, "corroborated", NOW)).toBeLessThan(INCLUDE_THRESHOLD);
+});
+
 test("scoreRule stays finite when evidence carries an unparseable createdAt", () => {
   const evidence = [ev({ association: "OWNER", createdAt: "not-a-date" })];
   const score = scoreRule(evidence, "corroborated", NOW);

@@ -10,9 +10,18 @@ const MAX_CITATIONS = 3;
 // a structural marker like "<!-- prlore:end -->". Collapsing whitespace runs to a
 // single space keeps everything on one line (no new heading, no list-item break),
 // and stripping comment delimiters keeps a model-authored string from masquerading
-// as a document-structure comment.
+// as a document-structure comment. Marker stripping runs to a FIXPOINT: a single
+// pass is bypassable — "<<!--!-- prlore:end ---->>" reassembles to
+// "<!-- prlore:end -->" once the inner markers are removed — so keep stripping
+// until the string stops changing.
 function sanitize(s: string): string {
-  return s.replace(/\s+/g, " ").replace(/<!--/g, "").replace(/-->/g, "").trim();
+  let out = s.replace(/\s+/g, " ");
+  let prev: string;
+  do {
+    prev = out;
+    out = out.replaceAll("<!--", "").replaceAll("-->", "");
+  } while (out !== prev);
+  return out.trim();
 }
 
 function citationsFor(rule: RuleRecord, config: MineConfig): string {
