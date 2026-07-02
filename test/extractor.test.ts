@@ -117,6 +117,30 @@ test("budget exhaustion stops later work without provider calls", async () => {
   expect(s.failed).toBe(0);
 });
 
+test("drain() returns a snapshot, not live state", async () => {
+  const stateDir = await dir();
+  const { p } = provider(() => "ok");
+  const x = new Extractor({ provider: p, stateDir });
+  x.enqueue(pr(20));
+  const s1 = await x.drain();
+  expect(s1).toEqual({
+    prsSeen: 1, extracted: 1, cacheHits: 0, failed: 0,
+    skippedBudget: 0, duplicates: 0, candidates: 1,
+  });
+  s1.extracted = 999;
+  const s2 = await x.drain();
+  expect(s2.extracted).toBe(1);
+});
+
+test("enqueue after drain throws", async () => {
+  const stateDir = await dir();
+  const { p } = provider(() => "ok");
+  const x = new Extractor({ provider: p, stateDir });
+  x.enqueue(pr(30));
+  await x.drain();
+  expect(() => x.enqueue(pr(99))).toThrow(/after drain/);
+});
+
 test("extractor respects the concurrency cap", async () => {
   const stateDir = await dir();
   const { p, stats } = provider(() => "ok");

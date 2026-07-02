@@ -47,6 +47,7 @@ export class Extractor {
   }
 
   enqueue(pr: NormalizedPr): void {
+    if (this.drained) throw new Error("Extractor.enqueue() called after drain()");
     const key = `${pr.number}|${pr.updatedAt}`;
     if (this.seen.has(key)) {
       this.summary.duplicates++;
@@ -97,6 +98,7 @@ export class Extractor {
       this.summary.candidates = this.collected.length;
       return this.summary;
     })();
-    return this.drained;
+    // Return a snapshot so callers can't mutate (or observe mutation of) internal state.
+    return this.drained.then((s) => ({ ...s }));
   }
 }
