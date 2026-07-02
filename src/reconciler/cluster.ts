@@ -65,6 +65,9 @@ function mergeScope(members: VerifiedCandidate[]): string[] {
   return out;
 }
 
+// NOTE for consumers (Tasks 4-6): "member order" in these merge helpers (first non-empty
+// rationale, polarity tie-break to first member) is the draft's memberIndexes listing order —
+// after validity + first-claim-wins filtering — NOT the original bucket/input order.
 function firstRationale(members: VerifiedCandidate[]): string | undefined {
   for (const m of members) {
     if (m.rationale && m.rationale.length > 0) return m.rationale;
@@ -84,12 +87,19 @@ function majorityPolarity(members: VerifiedCandidate[]): "prescriptive" | "prosc
 }
 
 // Dedup + range-filter memberIndexes while preserving the LLM's original ordering
-// (used for "first member" tie-breaks: rationale, polarity tie).
-function validMemberIndexes(indexes: number[], bucketSize: number): number[] {
+// (used for "first member" tie-breaks: rationale, polarity tie). First-claim-wins across
+// groups: indexes already claimed by an earlier group in this bucket (`alreadyAssigned`)
+// are skipped, so clusters stay a disjoint partition of the bucket's candidates.
+function validMemberIndexes(
+  indexes: number[],
+  bucketSize: number,
+  alreadyAssigned: Set<number>,
+): number[] {
   const seen = new Set<number>();
   const out: number[] = [];
   for (const i of indexes) {
     if (i < 0 || i >= bucketSize) continue;
+    if (alreadyAssigned.has(i)) continue;
     if (seen.has(i)) continue;
     seen.add(i);
     out.push(i);
@@ -175,8 +185,9 @@ export async function clusterCandidates(
     const groupGlobalIds: (number | undefined)[] = [];
 
     for (const group of draft.groups) {
-      const memberIndexes = validMemberIndexes(group.memberIndexes, bucket.length);
+      const memberIndexes = validMemberIndexes(group.memberIndexes, bucket.length, assigned);
       if (memberIndexes.length === 0) {
+        // All indexes invalid or already claimed by an earlier group: no cluster.
         groupGlobalIds.push(undefined);
         continue;
       }

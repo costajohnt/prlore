@@ -174,6 +174,69 @@ test("fallback: throwing bucket falls back to exact-normalized-statement merge; 
   expect(conflictPairs).toEqual([]);
 });
 
+test("cross-group duplicate index: first claim wins, no double-membership", async () => {
+  const c0 = cand("Prefer const over let");
+  const c1 = cand("Never use var");
+  const draft: Draft = {
+    groups: [
+      { memberIndexes: [0, 1], canonicalStatement: "Prefer const, never var" },
+      { memberIndexes: [1], canonicalStatement: "Never use var (dupe claim)" },
+    ],
+  };
+  const { p } = fakeProvider([draft]);
+
+  const { clusters } = await clusterCandidates([c0, c1], p);
+
+  // Candidate 1's evidence lands ONLY in the first-claiming cluster.
+  const first = clusters.find((c) => c.statement === "Prefer const, never var");
+  expect(first).toBeDefined();
+  expect(first!.evidence.map((e) => e.quote).sort()).toEqual(
+    [c0.evidence[0]!.quote, c1.evidence[0]!.quote].sort(),
+  );
+  // Group1 is empty after first-claim filtering and produces no cluster.
+  expect(clusters.find((c) => c.statement === "Never use var (dupe claim)")).toBeUndefined();
+  expect(clusters).toHaveLength(1);
+
+  // Total membership covers every candidate exactly once.
+  const counts = new Map<string, number>();
+  for (const q of clusters.flatMap((c) => c.evidence.map((e) => e.quote))) {
+    counts.set(q, (counts.get(q) ?? 0) + 1);
+  }
+  expect(counts.get(c0.evidence[0]!.quote)).toBe(1);
+  expect(counts.get(c1.evidence[0]!.quote)).toBe(1);
+  expect(counts.size).toBe(2);
+});
+
+test("polarity majority and first non-empty rationale in member order", async () => {
+  const c0 = cand("Never commit secrets", { polarity: "proscriptive" });
+  const c1 = cand("Do not commit credentials", { polarity: "proscriptive", rationale: "" });
+  const c2 = cand("Keep secrets out of the repo", { polarity: "prescriptive", rationale: "because X" });
+  const draft: Draft = {
+    groups: [{ memberIndexes: [0, 1, 2], canonicalStatement: "Never commit secrets" }],
+  };
+  const { p } = fakeProvider([draft]);
+
+  const { clusters } = await clusterCandidates([c0, c1, c2], p);
+
+  expect(clusters).toHaveLength(1);
+  expect(clusters[0]!.polarity).toBe("proscriptive"); // 2-1 majority
+  expect(clusters[0]!.rationale).toBe("because X"); // first NON-EMPTY in member order
+});
+
+test("polarity tie falls back to the first member's polarity (memberIndexes order)", async () => {
+  const c0 = cand("Use feature flags", { polarity: "prescriptive" });
+  const c1 = cand("Don't ship unflagged features", { polarity: "proscriptive" });
+  const draft: Draft = {
+    groups: [{ memberIndexes: [0, 1], canonicalStatement: "Gate features behind flags" }],
+  };
+  const { p } = fakeProvider([draft]);
+
+  const { clusters } = await clusterCandidates([c0, c1], p);
+
+  expect(clusters).toHaveLength(1);
+  expect(clusters[0]!.polarity).toBe("prescriptive"); // tie -> first member listed
+});
+
 test("out-of-range index ignored, no candidate lost", async () => {
   const c0 = cand("Keep functions small");
   const c1 = cand("Write docstrings for public functions");
