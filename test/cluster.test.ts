@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import type { CompleteOptions, ModelProvider } from "../src/model/provider.js";
+import { BudgetExceededError, type CompleteOptions, type ModelProvider } from "../src/model/provider.js";
 import type { VerifiedCandidate } from "../src/reconciler/verify-evidence.js";
 import { clusterCandidates } from "../src/reconciler/cluster.js";
 
@@ -172,6 +172,22 @@ test("fallback: throwing bucket falls back to exact-normalized-statement merge; 
   );
 
   expect(conflictPairs).toEqual([]);
+});
+
+// ---- Fix 4: BudgetExceededError rethrows instead of falling back ----------
+
+test("Fix 4: BudgetExceededError from the provider propagates out of clusterCandidates, not swallowed into a fallback draft", async () => {
+  const c0 = cand("Always pin versions", { category: "process" });
+  const budgetProvider: ModelProvider = {
+    spentUsd: () => 5,
+    async complete<T>(): Promise<T> {
+      throw new BudgetExceededError(5, 5);
+    },
+  };
+  const counters = { clusterFallbacks: 0 };
+
+  await expect(clusterCandidates([c0], budgetProvider, { counters })).rejects.toBeInstanceOf(BudgetExceededError);
+  expect(counters.clusterFallbacks).toBe(0); // budget errors never count as a "fallback used" bucket
 });
 
 test("cross-group duplicate index: first claim wins, no double-membership", async () => {

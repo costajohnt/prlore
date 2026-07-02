@@ -3,7 +3,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import type { CompleteOptions, ModelProvider } from "../src/model/provider.js";
+import { BudgetExceededError, type CompleteOptions, type ModelProvider } from "../src/model/provider.js";
 import { synthesize, type SynthesizeDeps } from "../src/reconciler/synthesize.js";
 import { INCLUDE_THRESHOLD } from "../src/reconciler/score.js";
 import type { DocPlan } from "../src/reconciler/select.js";
@@ -57,7 +57,11 @@ function mkCandidates(c1CreatedAt = "2023-06-01T00:00:00Z"): CandidateLearning[]
   ];
 }
 
-function mkPr(number: number, body: string): NormalizedPr {
+// Fix 2 makes evidence.createdAt corpus-ground-truth: once a quote verifies against
+// a PR, the PR's own mergedAt/updatedAt (not the model's claimed date) drives
+// staleness. updatedAt is therefore a parameter so each test's PR-1 fixture can
+// carry the date its scenario actually needs (stale vs. recent).
+function mkPr(number: number, body: string, updatedAt = "2026-06-01T00:00:00Z"): NormalizedPr {
   return {
     number,
     title: `PR ${number}`,
@@ -66,7 +70,7 @@ function mkPr(number: number, body: string): NormalizedPr {
     authorAssociation: "OWNER",
     state: "MERGED",
     mergedAt: null,
-    updatedAt: "2026-06-01T00:00:00Z",
+    updatedAt,
     labels: [],
     files: [],
     threads: [],
@@ -75,8 +79,11 @@ function mkPr(number: number, body: string): NormalizedPr {
   };
 }
 
+// PR 1 (oldApi) is genuinely stale (2023) — matches the §11 stale-demotion scenario
+// used by Tests 1, 2, and 4. Test 3 (recent maintainer guidance) builds its own
+// PR-1 fixture with a recent date instead of reusing this one.
 const prs: NormalizedPr[] = [
-  mkPr(1, `Reviewing the widget code. ${QUOTE_C1}. Thanks!`),
+  mkPr(1, `Reviewing the widget code. ${QUOTE_C1}. Thanks!`, "2023-06-01T00:00:00Z"),
   mkPr(2, `Architecture note: ${QUOTE_C2}, no exceptions.`),
   mkPr(3, `Process reminder: ${QUOTE_C3} before tagging.`),
 ];
@@ -254,8 +261,15 @@ test("recent maintainer guidance against the code trend lands in contested, in n
   const repo = await buildFixtureRepo();
   const { provider } = scriptedProvider();
   const candidates = mkCandidates("2026-06-15T00:00:00Z"); // recent OWNER evidence -> 3a fires
+  // Fix 2: createdAt is corpus ground truth once a quote verifies, so this scenario
+  // needs its own PR-1 fixture dated recently (the shared `prs` PR-1 is stale, for
+  // the §11 stale-demotion tests) rather than reusing the module-level `prs`.
+  const recentPrs: NormalizedPr[] = [
+    mkPr(1, `Reviewing the widget code. ${QUOTE_C1}. Thanks!`, "2026-06-15T00:00:00Z"),
+    ...prs.slice(1),
+  ];
 
-  const { draft, provenance, contested } = await synthesize(baseConfig, patterns, candidates, prs, {
+  const { draft, provenance, contested } = await synthesize(baseConfig, patterns, candidates, recentPrs, {
     provider,
     repoPath: repo,
     now,
@@ -264,13 +278,18 @@ test("recent maintainer guidance against the code trend lands in contested, in n
   expect(draft).toContain("## Needs your call (contested)");
   expect(draft).toContain("Always use oldApi for widgets");
 
+  // Fix 6: a 3a-only contested rule (no conflicting cluster) gets a single item;
+  // since a code-trend probe ran (probeToken "oldApi"), a second evidence-free
+  // side is appended describing what the maintainer's guidance is contesting.
   expect(contested).toHaveLength(1);
   expect(contested[0]!.id).toBe("0");
   expect(contested[0]!.statement).toBe("Always use oldApi for widgets");
   expect(contested[0]!.reason).toContain("maintainer");
-  expect(contested[0]!.sides).toHaveLength(1);
+  expect(contested[0]!.sides).toHaveLength(2);
   expect(contested[0]!.sides[0]!.statement).toBe("Always use oldApi for widgets");
   expect(contested[0]!.sides[0]!.evidence).toHaveLength(1);
+  expect(contested[0]!.sides[1]!.statement).toBe("code trend: oldApi head 5, recent 1 vs prior 2");
+  expect(contested[0]!.sides[1]!.evidence).toEqual([]);
   expect(provenance.contested).toEqual(contested);
 
   // disjoint three-way split: contested appears in NEITHER rules NOR dropped
@@ -305,4 +324,141 @@ test("checkpoint at a non-analyzing stage is untouched; missing checkpoint and m
   const res = await synthesize(baseConfig, patterns, candidates, prs, { provider: provC.provider, repoPath: repo, now });
   expect(res.draft.length).toBeGreaterThan(0);
   expect(ProvenanceSchema.parse(res.provenance)).toEqual(res.provenance);
+});
+
+// ---- Fix 3: stage guard also accepts "synthesizing" ------------------------
+
+test("Fix 3: checkpoint pre-flipped to \"synthesizing\" by a job manager also flips to ready-for-preview", async () => {
+  const repo = await buildFixtureRepo();
+  const candidates = mkCandidates();
+  const stateDir = await mkdtemp(join(tmpdir(), "prlore-synth-synchecking-"));
+  await saveCheckpoint(stateDir, mkCheckpoint("synthesizing"));
+  const { provider } = scriptedProvider();
+
+  await synthesize(baseConfig, patterns, candidates, prs, { provider, repoPath: repo, now, stateDir });
+
+  const cp = await loadCheckpoint(stateDir);
+  expect(cp!.stage).toBe("ready-for-preview");
+});
+
+// ---- Fix 4: budget exhaustion surfaces instead of degrading silently -------
+
+test("Fix 4: BudgetExceededError from the reconcile call propagates out of synthesize, not swallowed", async () => {
+  const repo = await buildFixtureRepo();
+  const candidates = mkCandidates();
+  let calls = 0;
+  const budgetProvider: ModelProvider = {
+    spentUsd: () => 5,
+    async complete<T>({ prompt }: CompleteOptions<T>): Promise<T> {
+      calls++;
+      if (prompt.startsWith("meta:")) throw new BudgetExceededError(5, 5); // reconcile call
+      // cluster call: same scripted behavior as scriptedProvider()
+      const lines = prompt.split("\n").filter((l) => /^\[\d+\]/.test(l));
+      const groups = lines.map((line, i) => ({
+        memberIndexes: [i],
+        canonicalStatement: line.replace(/^\[\d+\]\s*/, "").replace(/ \((?:prescriptive|proscriptive)\)$/, ""),
+      }));
+      return { groups } as T;
+    },
+  };
+
+  await expect(
+    synthesize(baseConfig, patterns, candidates, prs, { provider: budgetProvider, repoPath: repo, now }),
+  ).rejects.toBeInstanceOf(BudgetExceededError);
+  expect(calls).toBeGreaterThan(0); // clustering did run before the budget-exhausted reconcile call
+});
+
+test("Fix 4: a cluster-bucket fallback produces a warnings entry", async () => {
+  const repo = await buildFixtureRepo();
+  const candidates = mkCandidates();
+  let calls = 0;
+  const flakyClusterProvider: ModelProvider = {
+    spentUsd: () => 0,
+    async complete<T>({ prompt }: CompleteOptions<T>): Promise<T> {
+      calls++;
+      if (prompt.startsWith("intent:")) return defaultPlan as T; // plan call
+      if (prompt.startsWith("meta:")) return reconcileDraft as T; // reconcile call
+      throw new Error("model unavailable for clustering"); // every cluster bucket falls back
+    },
+  };
+
+  const { warnings } = await synthesize(baseConfig, patterns, candidates, prs, {
+    provider: flakyClusterProvider,
+    repoPath: repo,
+    now,
+  });
+
+  // mkCandidates() spans 3 categories (style, architecture, process) -> 3 buckets fall back
+  expect(warnings).toEqual(["cluster fallback used for 3 bucket(s)"]);
+});
+
+test("Fix 4: no warnings when clustering succeeds without falling back", async () => {
+  const repo = await buildFixtureRepo();
+  const candidates = mkCandidates();
+  const { provider } = scriptedProvider();
+
+  const { warnings } = await synthesize(baseConfig, patterns, candidates, prs, { provider, repoPath: repo, now });
+
+  expect(warnings).toEqual([]);
+});
+
+// ---- Fix 6: conflict-pair contested rules merge into ONE ContestedItem ----
+
+test("Fix 6: a 3b conflict-pair contested outcome merges both sides into a single ContestedItem", async () => {
+  const repo = await buildFixtureRepo();
+
+  // Two candidates in the same category (style), deliberately conflicting, with
+  // asymmetric evidence strength (3 PRs vs 2) so "higher-scored side leads" is
+  // unambiguous rather than resolved by a tie-break.
+  const mkEvidence = (prNums: number[]) =>
+    prNums.map((pr) => ({
+      pr, author: "owner1", association: "OWNER" as const,
+      quote: `quote body text number ${pr} for indentation style`, createdAt: "2026-06-25T00:00:00Z",
+    }));
+  const candidates: CandidateLearning[] = [
+    { statement: "Use tabs for indentation", category: "style", polarity: "prescriptive", scope: [], evidence: mkEvidence([1, 2]) },
+    { statement: "Use spaces for indentation", category: "style", polarity: "proscriptive", scope: [], evidence: mkEvidence([3, 4, 5]) },
+  ];
+  const conflictPrs: NormalizedPr[] = [1, 2, 3, 4, 5].map((n) => ({
+    number: n, title: `PR ${n}`, body: `quote body text number ${n} for indentation style`,
+    author: "owner1", authorAssociation: "OWNER", state: "MERGED", mergedAt: "2026-06-25T00:00:00Z",
+    updatedAt: "2026-06-25T00:00:00Z", labels: [], files: [], threads: [], reviews: [], comments: [],
+  }));
+
+  let clusterCallSeen = false;
+  const provider: ModelProvider = {
+    spentUsd: () => 0,
+    async complete<T>({ prompt }: CompleteOptions<T>): Promise<T> {
+      if (prompt.startsWith("intent:")) return { title: "T", overview: "", perArea: false, sections: [] } as T; // plan
+      if (prompt.startsWith("meta:")) {
+        // reconcile: both proposed "corroborated" (no probe) -> strong-enough scores clear 3b's threshold
+        return { proposals: [
+          { clusterId: 0, proposedVerdict: "corroborated" },
+          { clusterId: 1, proposedVerdict: "corroborated" },
+        ] } as T;
+      }
+      clusterCallSeen = true;
+      return {
+        groups: [
+          { memberIndexes: [0], canonicalStatement: "Use tabs for indentation", conflictsWithGroup: 1 },
+          { memberIndexes: [1], canonicalStatement: "Use spaces for indentation" },
+        ],
+      } as T;
+    },
+  };
+
+  const emptyPatterns: PatternsModel = { areas: [], patterns: [], migrations: [], meta: { languages: [], frameworks: [], tooling: [] } };
+  const { contested, provenance } = await synthesize(baseConfig, emptyPatterns, candidates, conflictPrs, { provider, repoPath: repo, now });
+
+  expect(clusterCallSeen).toBe(true);
+  expect(contested).toHaveLength(1); // ONE item, not two, for the one disagreement
+  expect(contested[0]!.id).toBe("0+1"); // lower id first, joined "+"
+  expect(contested[0]!.statement).toBe("Use spaces for indentation"); // higher-scored side (3 PRs > 2 PRs) leads
+  expect(contested[0]!.reason).toBe("conflicting guidance");
+  expect(contested[0]!.sides).toHaveLength(2);
+  const sideStatements = contested[0]!.sides.map((s) => s.statement).sort();
+  expect(sideStatements).toEqual(["Use spaces for indentation", "Use tabs for indentation"]);
+  expect(contested[0]!.sides.find((s) => s.statement === "Use tabs for indentation")!.evidence).toHaveLength(2);
+  expect(contested[0]!.sides.find((s) => s.statement === "Use spaces for indentation")!.evidence).toHaveLength(3);
+  expect(provenance.contested).toEqual(contested);
 });

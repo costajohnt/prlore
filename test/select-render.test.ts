@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import type { CompleteOptions, ModelProvider } from "../src/model/provider.js";
+import { BudgetExceededError, type CompleteOptions, type ModelProvider } from "../src/model/provider.js";
 import { planDoc, type DocPlan } from "../src/reconciler/select.js";
 import { renderDraft } from "../src/reconciler/render.js";
 import { MineConfigSchema } from "../src/schemas/mine-config.js";
@@ -159,6 +159,20 @@ test("provider throw: planDoc degrades to a deterministic score-desc plan that s
   expect(Math.min(...survivingScores)).toBeGreaterThan(Math.max(...trimmedScores)); // top scores kept
 });
 
+// ---- Fix 4: BudgetExceededError rethrows instead of falling back ----------
+
+test("Fix 4: BudgetExceededError from the provider propagates out of planDoc, not swallowed into a fallback plan", async () => {
+  const rules = [mkRule("r1", 0.9)];
+  const budgetProvider: ModelProvider = {
+    spentUsd: () => 5,
+    async complete<T>(): Promise<T> {
+      throw new BudgetExceededError(5, 5);
+    },
+  };
+
+  await expect(planDoc(rules, "intent", emptyAreas, budgetProvider)).rejects.toBeInstanceOf(BudgetExceededError);
+});
+
 // ---- Behavior 4: prompt carries intent verbatim + rule ids ---------------
 
 test("planDoc's prompt carries the intent verbatim and each rule line carries its id", async () => {
@@ -238,6 +252,60 @@ test("renderDraft omits the contested section entirely when there is nothing con
   const out = renderDraft(plan, rules, [], baseConfig);
 
   expect(out).not.toContain("Needs your call");
+});
+
+// ---- Fix 7: render sanitizer against markdown injection -------------------
+
+test("Fix 7: a newline-smuggled heading in a statement renders on one line with no injected heading", () => {
+  const injected = mkRule("r1", 0.9, { statement: "evil\n## Injected" });
+  const plan: DocPlan = { title: "T", overview: "o", perArea: false, sections: [{ heading: "Core", ruleIds: ["r1"] }] };
+
+  const out = renderDraft(plan, [injected], [], baseConfig);
+
+  expect(out).not.toMatch(/\n## Injected/);
+  expect(out).toContain("evil ## Injected"); // collapsed onto one line, whitespace-joined
+  const lines = out.split("\n");
+  expect(lines.filter((l) => l.startsWith("## "))).toEqual(["## Core"]); // no extra heading line
+});
+
+test("Fix 7: an HTML comment marker in a statement is stripped so it can't close/reopen a structural comment", () => {
+  const injected = mkRule("r1", 0.9, { statement: "close it <!-- prlore:end --> then more" });
+  const plan: DocPlan = { title: "T", overview: "o", perArea: false, sections: [{ heading: "Core", ruleIds: ["r1"] }] };
+
+  const out = renderDraft(plan, [injected], [], baseConfig);
+
+  // Only the ONE static generator-header comment marker may remain; the
+  // model-derived statement's markers must be stripped.
+  expect(out.split("<!--").length - 1).toBe(1);
+  expect(out.split("-->").length - 1).toBe(1);
+  expect(out).toContain("close it  prlore:end  then more");
+});
+
+test("Fix 7: sanitizer applies to rationale, title, overview, section heading, and contested statement/reason", () => {
+  const rule = mkRule("r1", 0.9, { statement: "clean", rationale: "bad\n## heading in rationale" });
+  const plan: DocPlan = {
+    title: "Title\n## injected",
+    overview: "overview <!-- prlore:end -->",
+    perArea: false,
+    sections: [{ heading: "Section\nheading", ruleIds: ["r1"] }],
+  };
+  const contested: ContestedItem[] = [
+    { id: "c1", statement: "statement\n## boom", reason: "reason <!-- x -->", sides: [] },
+  ];
+
+  const out = renderDraft(plan, [rule], contested, baseConfig);
+
+  expect(out).not.toContain("\n## injected");
+  expect(out).not.toContain("\n## boom");
+  expect(out).not.toContain("\n## heading in rationale");
+  // Only the ONE static generator-header comment marker may remain.
+  expect(out.split("<!--").length - 1).toBe(1);
+  expect(out.split("-->").length - 1).toBe(1);
+  expect(out).toContain("# Title ## injected");
+  expect(out).toContain("overview  prlore:end");
+  expect(out).toContain("## Section heading");
+  expect(out).toContain("bad ## heading in rationale");
+  expect(out).toContain("statement ## boom — reason  x");
 });
 
 // ---- Behavior 6: sidecar-only mode ----------------------------------------

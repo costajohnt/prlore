@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { GitRunner } from "../analyzer/git.js";
 import { trendFor } from "../analyzer/probes.js";
-import type { ModelProvider } from "../model/provider.js";
+import { BudgetExceededError, type ModelProvider } from "../model/provider.js";
 import type { PatternsModel } from "../schemas/patterns-model.js";
 import type { EvidenceRecord, Verdict } from "../schemas/provenance.js";
 import type { Cluster } from "./cluster.js";
@@ -11,6 +11,12 @@ export type ReconciledRule = Omit<Cluster, "id"> & {
   id: number | string;
   verdict: Verdict;
   contestedReason?: string; // set iff verdict === "contested"
+  // Set only for 3b conflict-pair contested outcomes: the OTHER rule's id in the
+  // pair, so a downstream consumer (synthesize) can merge the two into one
+  // ContestedItem with both sides instead of emitting two separate items for what
+  // is really one disagreement. 3a-only contested rules (no conflicting cluster)
+  // never get this set.
+  contestedWith?: number | string;
   probeResult?: { token: string; head: number; recent: number; prior: number };
   exemplars: string[];
   syntheticScore?: number;
@@ -97,7 +103,8 @@ export async function reconcileClusters(
       schema: ReconciliationDraftSchema,
       maxTokens: 4096,
     });
-  } catch {
+  } catch (err) {
+    if (err instanceof BudgetExceededError) throw err;
     draft = { proposals: [] };
   }
 
@@ -165,6 +172,8 @@ export async function reconcileClusters(
         ruleB.verdict = "contested";
         ruleB.contestedReason = "conflicting guidance";
       }
+      ruleA.contestedWith = ruleB.id;
+      ruleB.contestedWith = ruleA.id;
       continue;
     }
 
@@ -176,12 +185,16 @@ export async function reconcileClusters(
       ruleA.contestedReason = "conflicting guidance";
       ruleB.verdict = "contested";
       ruleB.contestedReason = "conflicting guidance";
+      ruleA.contestedWith = ruleB.id;
+      ruleB.contestedWith = ruleA.id;
     } else if (scoreA === scoreB) {
       // Tie below threshold: both contested.
       ruleA.verdict = "contested";
       ruleA.contestedReason = "conflicting guidance";
       ruleB.verdict = "contested";
       ruleB.contestedReason = "conflicting guidance";
+      ruleA.contestedWith = ruleB.id;
+      ruleB.contestedWith = ruleA.id;
     } else if (scoreA < scoreB) {
       ruleA.verdict = "trending-away";
     } else {

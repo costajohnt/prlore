@@ -41,7 +41,12 @@ export function recurrenceOf(evidence: EvidenceRecord[]): number {
 }
 
 export function recencyOf(evidence: EvidenceRecord[], now: number): number {
-  const newest = Math.max(0, ...evidence.map((e) => new Date(e.createdAt).getTime()));
+  // Unparseable createdAt values (garbage/corrupted dates) must never poison the
+  // max: Math.max(0, NaN, ...) === NaN, which would propagate into scoreRule and
+  // crash every downstream sort/threshold check. Filter them out first, then treat
+  // "nothing left" the same as "no dated evidence" (synthetic rules) — no decay.
+  const times = evidence.map((e) => new Date(e.createdAt).getTime()).filter((t) => !Number.isNaN(t));
+  const newest = Math.max(0, ...times);
   if (newest === 0) return 1; // no dated evidence (synthetic rules) — no decay
   const ageMonths = Math.max(0, (now - newest) / MONTH_MS);
   return 2 ** (-ageMonths / SCORING.halfLifeMonths);
@@ -52,5 +57,12 @@ export function corroborationOf(verdict: Verdict): number {
 }
 
 export function scoreRule(evidence: EvidenceRecord[], verdict: Verdict, now: number): number {
+  if (verdict === "unobservable") {
+    // Spec §6.3: keep iff authority × recurrence clears threshold. Recency is
+    // deliberately omitted here — process norms (e.g. "PRs need two approvals")
+    // aren't re-corroborated by code activity, so time-decay would wrongly kill
+    // an otherwise-stable norm just because nobody re-typed it recently.
+    return authorityOf(evidence) * recurrenceOf(evidence) * corroborationOf(verdict);
+  }
   return authorityOf(evidence) * recurrenceOf(evidence) * recencyOf(evidence, now) * corroborationOf(verdict);
 }

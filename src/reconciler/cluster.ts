@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ModelProvider } from "../model/provider.js";
+import { BudgetExceededError, type ModelProvider } from "../model/provider.js";
 import type { EvidenceRecord } from "../schemas/provenance.js";
 import type { VerifiedCandidate } from "./verify-evidence.js";
 
@@ -174,7 +174,11 @@ export async function clusterCandidates(
         schema: ClusterDraftSchema,
         maxTokens: 4096,
       });
-    } catch {
+    } catch (err) {
+      // Budget exhaustion is not a transient/degradable failure like a flaky model
+      // response — it means every remaining call in this run will fail the same
+      // way, so silently falling back per-bucket would just mask the real problem.
+      if (err instanceof BudgetExceededError) throw err;
       usedFallback = true;
       draft = fallbackDraft(bucket);
       if (opts?.counters) opts.counters.clusterFallbacks++;

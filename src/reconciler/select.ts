@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ModelProvider } from "../model/provider.js";
+import { BudgetExceededError, type ModelProvider } from "../model/provider.js";
 import type { PatternsModel } from "../schemas/patterns-model.js";
 import type { RuleRecord } from "../schemas/provenance.js";
 
@@ -136,7 +136,8 @@ export async function planDoc(
       schema: DocPlanSchema,
       maxTokens: 4096,
     });
-  } catch {
+  } catch (err) {
+    if (err instanceof BudgetExceededError) throw err;
     draft = fallbackDraft(rules);
   }
 

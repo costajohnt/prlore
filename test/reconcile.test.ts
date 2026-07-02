@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { realGit } from "../src/analyzer/git.js";
 import { trendFor } from "../src/analyzer/probes.js";
-import type { CompleteOptions, ModelProvider } from "../src/model/provider.js";
+import { BudgetExceededError, type CompleteOptions, type ModelProvider } from "../src/model/provider.js";
 import type { Cluster } from "../src/reconciler/cluster.js";
 import {
   mergeCodeOnlyPatterns,
@@ -291,6 +291,106 @@ test("conflict pair: a 3a-contested side stays contested and drags the other sid
   expect(a.contestedReason).toContain("maintainer"); // keeps its 3a reason
   expect(b.verdict).toBe("contested");
   expect(b.contestedReason).toBe("conflicting guidance");
+});
+
+// ---- Fix 4: BudgetExceededError rethrows instead of falling back ----------
+
+test("Fix 4: BudgetExceededError from the provider propagates out of reconcileClusters, not swallowed into an empty draft", async () => {
+  const cluster = mkCluster(0, "use oldApi everywhere");
+  const budgetProvider: ModelProvider = {
+    spentUsd: () => 5,
+    async complete<T>(): Promise<T> {
+      throw new BudgetExceededError(5, 5);
+    },
+  };
+
+  await expect(
+    reconcileClusters([cluster], [], emptyPatterns, {
+      provider: budgetProvider,
+      git: realGit,
+      repoPath: await buildFixtureRepo(),
+      now,
+    }),
+  ).rejects.toBeInstanceOf(BudgetExceededError);
+});
+
+// ---- Fix 6: contestedWith pairing on 3b outcomes ---------------------------
+
+test("Fix 6: both-contested (>=threshold) 3b outcome sets contestedWith to each other's id", async () => {
+  const c0 = mkCluster(0, "use tabs", { evidence: [ev({ pr: 1 })] });
+  const c1 = mkCluster(1, "use spaces", { evidence: [ev({ pr: 2 })] });
+  const draft: Draft = {
+    proposals: [
+      { clusterId: 0, proposedVerdict: "corroborated" },
+      { clusterId: 1, proposedVerdict: "corroborated" },
+    ],
+  };
+  const { p } = fakeProvider(draft);
+
+  const rules = await reconcileClusters([c0, c1], [[0, 1]], emptyPatterns, {
+    provider: p,
+    git: realGit,
+    repoPath: await buildFixtureRepo(),
+    now,
+  });
+
+  const a = rules.find((r) => r.id === 0)!;
+  const b = rules.find((r) => r.id === 1)!;
+  expect(a.contestedWith).toBe(1);
+  expect(b.contestedWith).toBe(0);
+});
+
+test("Fix 6: sticky 3a-drags-3b outcome also sets contestedWith on both sides", async () => {
+  const repo = await buildFixtureRepo();
+  const cA = mkCluster(0, "use oldApi everywhere", {
+    evidence: [ev({ pr: 1, createdAt: "2026-06-15T00:00:00Z" })],
+  });
+  const cB = mkCluster(1, "never use oldApi", {
+    polarity: "proscriptive",
+    evidence: [ev({ pr: 2 })],
+  });
+  const draft: Draft = {
+    proposals: [
+      { clusterId: 0, proposedVerdict: "corroborated", probeToken: "oldApi", probeExpectation: "presence-supports" },
+      { clusterId: 1, proposedVerdict: "corroborated" },
+    ],
+  };
+  const { p } = fakeProvider(draft);
+
+  const rules = await reconcileClusters([cA, cB], [[0, 1]], emptyPatterns, {
+    provider: p,
+    git: realGit,
+    repoPath: repo,
+    now,
+  });
+
+  const a = rules.find((r) => r.id === 0)!;
+  const b = rules.find((r) => r.id === 1)!;
+  expect(a.contestedWith).toBe(1);
+  expect(b.contestedWith).toBe(0);
+});
+
+test("Fix 6: a 3a-only contested rule (no conflict pair involved) never gets contestedWith", async () => {
+  const repo = await buildFixtureRepo();
+  const cluster = mkCluster(0, "use oldApi everywhere", {
+    evidence: [ev({ createdAt: "2026-06-15T00:00:00Z" })],
+  });
+  const draft: Draft = {
+    proposals: [
+      { clusterId: 0, proposedVerdict: "corroborated", probeToken: "oldApi", probeExpectation: "presence-supports" },
+    ],
+  };
+  const { p } = fakeProvider(draft);
+
+  const [rule] = await reconcileClusters([cluster], [], emptyPatterns, {
+    provider: p,
+    git: realGit,
+    repoPath: repo,
+    now,
+  });
+
+  expect(rule!.verdict).toBe("contested");
+  expect(rule!.contestedWith).toBeUndefined();
 });
 
 // ---- Behavior 6: mergeCodeOnlyPatterns ------------------------------------

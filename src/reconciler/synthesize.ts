@@ -9,6 +9,7 @@ import type { PatternsModel } from "../schemas/patterns-model.js";
 import {
   ProvenanceSchema,
   type ContestedItem,
+  type EvidenceRecord,
   type Provenance,
   type RuleRecord,
 } from "../schemas/provenance.js";
@@ -16,7 +17,7 @@ import { loadCheckpoint, saveCheckpoint } from "../state/checkpoint.js";
 import { clusterCandidates } from "./cluster.js";
 import { mergeCodeOnlyPatterns, reconcileClusters, type ReconciledRule } from "./reconcile.js";
 import { renderDraft } from "./render.js";
-import { INCLUDE_THRESHOLD, scoreRule } from "./score.js";
+import { authorityOf, INCLUDE_THRESHOLD, recurrenceOf, scoreRule } from "./score.js";
 import { planDoc } from "./select.js";
 import { verifyEvidence } from "./verify-evidence.js";
 
@@ -50,12 +51,52 @@ function toRuleRecord(rule: ReconciledRule, nowMs: number): RuleRecord {
   };
 }
 
-function toContestedItem(rule: ReconciledRule): ContestedItem {
+// Evidence-strength tie-break used ONLY to pick which side's statement leads a
+// merged pair item: scoreRule can't be used here because corroborationOf("contested")
+// is 0, so both sides would always score 0 and the comparison would be meaningless.
+function evidenceStrength(rule: ReconciledRule): number {
+  return authorityOf(rule.evidence) * recurrenceOf(rule.evidence);
+}
+
+function contestedSide(rule: ReconciledRule): { statement: string; evidence: EvidenceRecord[] } {
+  return { statement: rule.statement, evidence: rule.evidence };
+}
+
+// 3b conflict-pair items: one disagreement, one ContestedItem, both sides carried.
+// id = the two rule ids joined "+", lower first, for a deterministic stable key.
+function pairedContestedItem(a: ReconciledRule, b: ReconciledRule): ContestedItem {
+  const [lo, hi] = a.id < b.id ? [a, b] : [b, a];
+  const leader = evidenceStrength(a) >= evidenceStrength(b) ? a : b;
+  // Prefer whichever side carries a specific reason (e.g. a 3a-origin "recent
+  // maintainer guidance..." reason) over the generic 3b "conflicting guidance".
+  const reason =
+    (a.contestedReason && a.contestedReason !== "conflicting guidance" && a.contestedReason) ||
+    (b.contestedReason && b.contestedReason !== "conflicting guidance" && b.contestedReason) ||
+    a.contestedReason ||
+    b.contestedReason ||
+    "contested";
+  return {
+    id: `${String(lo.id)}+${String(hi.id)}`,
+    statement: leader.statement,
+    reason,
+    sides: [contestedSide(a), contestedSide(b)],
+  };
+}
+
+// 3a-only items: single rule, no conflicting counterpart. When a code trend probe
+// ran (the demotion the maintainer's recent guidance is contesting), surface it as
+// a second, evidence-free side so the reader sees what's actually being disputed.
+function singleContestedItem(rule: ReconciledRule): ContestedItem {
+  const sides = [contestedSide(rule)];
+  if (rule.probeResult) {
+    const { token, head, recent, prior } = rule.probeResult;
+    sides.push({ statement: `code trend: ${token} head ${head}, recent ${recent} vs prior ${prior}`, evidence: [] });
+  }
   return {
     id: String(rule.id),
     statement: rule.statement,
     reason: rule.contestedReason ?? "contested",
-    sides: [{ statement: rule.statement, evidence: rule.evidence }],
+    sides,
   };
 }
 
@@ -71,11 +112,19 @@ export async function synthesize(
   candidates: CandidateLearning[],
   prs: NormalizedPr[],
   deps: SynthesizeDeps,
-): Promise<{ draft: string; provenance: Provenance; contested: ContestedItem[] }> {
+): Promise<{ draft: string; provenance: Provenance; contested: ContestedItem[]; warnings: string[] }> {
   const { provider, repoPath, git = realGit, now = Date.now, stateDir, excludes } = deps;
+  const warnings: string[] = [];
 
   const verified = verifyEvidence(candidates, prs);
-  const { clusters, conflictPairs } = await clusterCandidates(verified, provider);
+  const counters = { clusterFallbacks: 0 };
+  const { clusters, conflictPairs } = await clusterCandidates(verified, provider, { counters });
+  if (counters.clusterFallbacks > 0) {
+    warnings.push(`cluster fallback used for ${counters.clusterFallbacks} bucket(s)`);
+  }
+  // Reconcile/plan fallbacks are invisible externally by design — a BudgetExceededError
+  // from either now rethrows (see reconcile.ts / select.ts) instead of degrading silently,
+  // and non-budget failures there keep their existing deterministic-fallback behavior.
   const reconciled = await reconcileClusters(clusters, conflictPairs, patterns, {
     provider,
     git,
@@ -90,9 +139,20 @@ export async function synthesize(
   const contested: ContestedItem[] = [];
   const rules: RuleRecord[] = [];
   const dropped: RuleRecord[] = [];
+  const contestedById = new Map(merged.filter((r) => r.verdict === "contested").map((r) => [r.id, r]));
+  const consumed = new Set<ReconciledRule["id"]>();
   for (const rule of merged) {
     if (rule.verdict === "contested") {
-      contested.push(toContestedItem(rule));
+      if (consumed.has(rule.id)) continue; // already emitted as the other half of a pair
+      const partner = rule.contestedWith !== undefined ? contestedById.get(rule.contestedWith) : undefined;
+      if (partner) {
+        contested.push(pairedContestedItem(rule, partner));
+        consumed.add(rule.id);
+        consumed.add(partner.id);
+      } else {
+        contested.push(singleContestedItem(rule));
+        consumed.add(rule.id);
+      }
       continue;
     }
     const record = toRuleRecord(rule, now());
@@ -117,14 +177,17 @@ export async function synthesize(
     await atomicWrite(join(stateDir, "draft.md"), draft);
     await atomicWrite(join(stateDir, "provenance.json"), JSON.stringify(provenance, null, 2));
 
-    // Guarded stage flip: only advance from "analyzing"; a missing checkpoint or a
-    // checkpoint at any other stage is left untouched (same pattern as extractFromCorpus).
+    // Guarded stage flip: advance from "analyzing" OR "synthesizing" — synthesize
+    // owns the analyzing->synthesizing->ready-for-preview transition, but upstream
+    // job managers may or may not have already pre-flipped the checkpoint to
+    // "synthesizing" before calling in. A missing checkpoint or a checkpoint at any
+    // other stage is left untouched (same pattern as extractFromCorpus).
     const cp = await loadCheckpoint(stateDir);
-    if (cp && cp.stage === "analyzing") {
+    if (cp && (cp.stage === "analyzing" || cp.stage === "synthesizing")) {
       cp.stage = "ready-for-preview";
       await saveCheckpoint(stateDir, cp);
     }
   }
 
-  return { draft, provenance, contested };
+  return { draft, provenance, contested, warnings };
 }
