@@ -152,6 +152,22 @@ export async function reconcileClusters(
     const ruleB = ruleByClusterId.get(b);
     if (!ruleA || !ruleB) continue;
 
+    // Contested is sticky: a side already contested (3a) must never be silently
+    // resolved by the score comparison — corroborationOf(contested)=0 would make
+    // it lose every pairing. Instead the conflict drags the other side in too,
+    // and the already-contested side keeps its existing contestedReason.
+    if (ruleA.verdict === "contested" || ruleB.verdict === "contested") {
+      if (ruleA.verdict !== "contested") {
+        ruleA.verdict = "contested";
+        ruleA.contestedReason = "conflicting guidance";
+      }
+      if (ruleB.verdict !== "contested") {
+        ruleB.verdict = "contested";
+        ruleB.contestedReason = "conflicting guidance";
+      }
+      continue;
+    }
+
     const scoreA = scoreRule(ruleA.evidence, ruleA.verdict, now());
     const scoreB = scoreRule(ruleB.evidence, ruleB.verdict, now());
 

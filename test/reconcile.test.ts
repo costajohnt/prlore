@@ -228,6 +228,41 @@ test("conflict pair: the weakly-evidenced side is demoted to trending-away, the 
   expect(b.contestedReason).toBeUndefined();
 });
 
+test("conflict pair: a 3a-contested side stays contested and drags the other side to contested too", async () => {
+  const repo = await buildFixtureRepo();
+  // A: probe says trending-away (oldApi present, falling) + recent OWNER verified
+  // evidence -> 3a flips it to contested. corroborationOf(contested)=0, so a naive
+  // 3b score comparison would ALWAYS demote A back to trending-away.
+  const cA = mkCluster(0, "use oldApi everywhere", {
+    evidence: [ev({ pr: 1, createdAt: "2026-06-15T00:00:00Z" })],
+  });
+  const cB = mkCluster(1, "never use oldApi", {
+    polarity: "proscriptive",
+    evidence: [ev({ pr: 2 })],
+  });
+  const draft: Draft = {
+    proposals: [
+      { clusterId: 0, proposedVerdict: "corroborated", probeToken: "oldApi", probeExpectation: "presence-supports" },
+      { clusterId: 1, proposedVerdict: "corroborated" },
+    ],
+  };
+  const { p } = fakeProvider(draft);
+
+  const rules = await reconcileClusters([cA, cB], [[0, 1]], emptyPatterns, {
+    provider: p,
+    git: realGit,
+    repoPath: repo,
+    now,
+  });
+
+  const a = rules.find((r) => r.id === 0)!;
+  const b = rules.find((r) => r.id === 1)!;
+  expect(a.verdict).toBe("contested"); // sticky: 3b must not flip it to trending-away
+  expect(a.contestedReason).toContain("maintainer"); // keeps its 3a reason
+  expect(b.verdict).toBe("contested");
+  expect(b.contestedReason).toBe("conflicting guidance");
+});
+
 // ---- Behavior 6: mergeCodeOnlyPatterns ------------------------------------
 
 test("mergeCodeOnlyPatterns appends a synthetic rule only for patterns not covered by any cluster statement", () => {
