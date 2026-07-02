@@ -38,6 +38,25 @@ test("PR body text also counts as quotable surface", () => {
   expect(verifyEvidence([cand(1, "the pr body text")], prs)[0]!.evidence[0]!.verified).toBe(true);
 });
 
+test("empty and whitespace-only quotes never verify", () => {
+  const prs = [pr(1, "We always use X for this case.")];
+  expect(verifyEvidence([cand(1, "")], prs)[0]!.evidence[0]!.verified).toBe(false);
+  expect(verifyEvidence([cand(1, "   \n\t  ")], prs)[0]!.evidence[0]!.verified).toBe(false);
+});
+
+test("quotes below the minimum length floor never verify, even when present", () => {
+  const prs = [pr(1, "shortquot appears in this discussion")];
+  expect(verifyEvidence([cand(1, "shortquot")], prs)[0]!.evidence[0]!.verified).toBe(false);
+});
+
+test("a quote stitched across two separate parts does not verify", () => {
+  const base = pr(1, "X consistently in this repo");
+  const prs = [{ ...base, body: "we always use" }];
+  expect(
+    verifyEvidence([cand(1, "we always use X consistently")], prs)[0]!.evidence[0]!.verified,
+  ).toBe(false);
+});
+
 test("provenance schemas round-trip and reject bad verdicts", () => {
   const rule = {
     id: "r1", statement: "Use X", category: "style", polarity: "prescriptive", scope: [],
