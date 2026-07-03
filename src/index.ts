@@ -1,13 +1,8 @@
 #!/usr/bin/env node
-import {
-  accessSync,
-  constants as fsConstants,
-  createReadStream,
-  realpathSync,
-  type ReadStream,
-} from "node:fs";
+import { accessSync, constants as fsConstants, openSync, realpathSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import type { Writable } from "node:stream";
+import { ReadStream as TtyReadStream } from "node:tty";
 import { fileURLToPath } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { runMineCli } from "./cli.js";
@@ -36,10 +31,20 @@ export interface MainIo {
 // process.stdin when /dev/tty isn't accessible (Windows, non-interactive CI).
 // Not covered by the automated suite — driving a real TTY prompt from vitest
 // isn't practical; verified manually instead (see report).
-function ttyInputStream(): ReadStream | NodeJS.ReadStream {
+// Note: this MUST be a node:tty ReadStream (a uv_tty handle), not an
+// fs.createReadStream on the same path. A real pty probe proved
+// fs.createReadStream cannot be made to release the event loop from
+// destroy(): readline puts the fs ReadStream in flowing mode, and by the
+// time the answer chunk arrives the stream has already issued its *next*
+// uv_fs_read against /dev/tty. That read is threadpool-backed and
+// uncancellable — destroy() is too late by construction, and the process
+// hangs until the pty itself hits EOF. A tty.ReadStream isn't
+// threadpool-backed, so destroy() in the finally below actually closes the
+// fd and lets the event loop drain.
+function ttyInputStream(): TtyReadStream | NodeJS.ReadStream {
   try {
     accessSync("/dev/tty", fsConstants.R_OK);
-    return createReadStream("/dev/tty");
+    return new TtyReadStream(openSync("/dev/tty", "r"));
   } catch {
     return process.stdin;
   }
