@@ -7,6 +7,7 @@ import { makeTransport, resolveToken, withRetry } from "./github/client.js";
 import { emitDraft, EmitRefusedError, type EmitTarget } from "./emitter/emit.js";
 import type { JobDeps, JobManagerApi } from "./jobs/manager.js";
 import { AnthropicProvider } from "./model/anthropic.js";
+import { CONTESTED_HEADER } from "./reconciler/render.js";
 import { MineConfigSchema, type MineConfig } from "./schemas/mine-config.js";
 import type { ContestedItem, Provenance } from "./schemas/provenance.js";
 
@@ -42,15 +43,21 @@ const END = "<!-- prlore:end -->";
 // (including embedded newlines — JS `\s` covers \n, \r, and the Unicode line
 // separators) in every interpolated field to a single space before it ever
 // reaches the draft, and the only place a contested item's text lands is
-// inside a `- ${statement} — ${reason}` bullet. That means model-derived text
-// can never start a line with exactly this heading — the genuine heading
-// (render.ts emits it at most once) is the only thing that can ever match a
-// full line. Anchoring here, instead of lastIndexOf on the bare substring, is
-// what keeps a poisoned CONTESTED statement (whose text sits AFTER the real
-// header in the rendered draft) from being mistaken for the genuine
-// occurrence and causing the strip to keep the header plus every unresolved
-// contested bullet ahead of the poisoned one.
-const CONTESTED_HEADER_LINE = /^## Needs your call \(contested\)$/m;
+// inside a `- ${statement} — ${reason}` bullet. That means a contested item's
+// own text can never start a line with exactly this heading. A DocPlan
+// section heading COULD, though — it renders as its own line-initial "## "
+// heading, same as the genuine header — so render.ts's guardSectionHeading()
+// perturbs a section heading whose sanitized form would collide with
+// CONTESTED_HEADER before this code ever sees the draft. With that guard in
+// place, the genuine heading (render.ts emits it at most once) is the only
+// thing that can ever match a full line. Anchoring here, instead of
+// lastIndexOf on the bare substring, is what keeps a poisoned CONTESTED
+// statement (whose text sits AFTER the real header in the rendered draft)
+// from being mistaken for the genuine occurrence and causing the strip to
+// keep the header plus every unresolved contested bullet ahead of the
+// poisoned one. Built from render.ts's CONTESTED_HEADER constant rather than
+// a second hardcoded literal, so the two can't drift apart.
+const CONTESTED_HEADER_LINE = new RegExp(`^## ${CONTESTED_HEADER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m");
 
 // Same untrusted-text threat model as render.ts/emit.ts: a contested item's
 // statement is model-derived text landing in markdown we write to disk.

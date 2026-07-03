@@ -24,6 +24,33 @@ function sanitize(s: string): string {
   return out.trim();
 }
 
+// The literal text of the contested-section header (see the "## Needs your call
+// (contested)" push below). Exported so consumers that need to recognize the
+// genuine header line (e.g. server-tools.ts's finalizeDraft, which anchors its
+// contested-section strip to a full-line match of this text) derive it from the
+// same source of truth instead of hardcoding a second copy that could drift.
+export const CONTESTED_HEADER = "Needs your call (contested)";
+
+// A DocPlan section heading is model-controlled, untrusted text (see planDoc in
+// select.ts — the LLM chooses it, and select.ts's enforce() only validates rule
+// ids, not heading content). It's rendered directly as its own "## <heading>"
+// line below. If its sanitized form happened to equal CONTESTED_HEADER exactly,
+// the rendered document would contain two lines that read identically as
+// "## Needs your call (contested)": this poisoned section heading (which always
+// renders earlier, since sections come before the contested block) and the
+// genuine header. A consumer that locates "the" contested header by the first
+// full-line match (finalizeDraft in server-tools.ts) would then anchor to the
+// poisoned line and treat everything after it — every later section plus the
+// real contested block — as past the cut point, silently dropping it from the
+// written file (a fail-closed under-write: preview shows more than gets
+// written). This is the single place every section heading renders through, so
+// guarding here closes the hole for any caller, present or future. Perturbing
+// with a deterministic, human-legible prefix (rather than rejecting the whole
+// plan) keeps a plan usable even if a model picks this exact heading text.
+function guardSectionHeading(heading: string): string {
+  return heading === CONTESTED_HEADER ? `Section: ${heading}` : heading;
+}
+
 function citationsFor(rule: RuleRecord, config: MineConfig): string {
   if (config.output.citations !== "inline-light") return "";
   const prs = [...new Set(rule.evidence.filter((e) => e.verified).map((e) => e.pr))].sort((a, b) => a - b);
@@ -60,7 +87,7 @@ export function renderDraft(
   lines.push("");
 
   for (const section of plan.sections) {
-    lines.push(`## ${sanitize(section.heading)}`);
+    lines.push(`## ${guardSectionHeading(sanitize(section.heading))}`);
     for (const id of section.ruleIds) {
       const rule = ruleById.get(id);
       if (!rule) continue; // enforced plans should never carry unknown ids; defensive only
@@ -70,7 +97,7 @@ export function renderDraft(
   }
 
   if (contested.length > 0) {
-    lines.push("## Needs your call (contested)");
+    lines.push(`## ${CONTESTED_HEADER}`);
     for (const item of contested) {
       lines.push(`- ${sanitize(item.statement)} — ${sanitize(item.reason)}`);
     }

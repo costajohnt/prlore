@@ -391,6 +391,32 @@ test("Fix (contested strip): the genuine header renders exactly once as a full l
   expect(fullLineMatches).toHaveLength(1);
 });
 
+test("Fix (poisoned section heading): a section heading whose sanitized form equals the contested header text is perturbed, never rendering as a second full-line match", () => {
+  const poisonHeadingRule = mkRule("r1", 0.9, { statement: "harmless rule under the poisoned heading" });
+  const laterRule = mkRule("r2", 0.8, { statement: "a rule that must not be dropped" });
+  const plan: DocPlan = {
+    title: "T",
+    overview: "o",
+    perArea: false,
+    sections: [
+      { heading: "Needs your call (contested)", ruleIds: ["r1"] }, // model-controlled, poisoned
+      { heading: "Later", ruleIds: ["r2"] },
+    ],
+  };
+  const contested: ContestedItem[] = [{ id: "c1", statement: "real dispute", reason: "real reason", sides: [] }];
+
+  const out = renderDraft(plan, [poisonHeadingRule, laterRule], contested, baseConfig);
+
+  // Only the genuine (final) header may match the full-line pattern consumers
+  // (server-tools.ts's finalizeDraft) anchor their strip to. If the poisoned
+  // section heading also matched, the strip would cut the document at the
+  // FIRST match — the poisoned heading, which renders before the real one —
+  // silently dropping "Later"'s rule and the real contested section.
+  const fullLineMatches = out.match(/^## Needs your call \(contested\)$/gm) ?? [];
+  expect(fullLineMatches).toHaveLength(1);
+  expect(out).toContain(laterRule.statement); // survives past the poisoned heading
+});
+
 // ---- Behavior 6: sidecar-only mode ----------------------------------------
 
 test("sidecar-only citations mode never emits inline citation parens", () => {
