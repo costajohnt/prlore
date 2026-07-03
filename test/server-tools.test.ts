@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -347,4 +347,28 @@ test("cancel returns { checkpointed } and never crashes for an unknown jobId", a
   const res = await client.callTool({ name: "cancel", arguments: { jobId: "no-such-job" } });
   expect(res.isError).toBeFalsy();
   expect(JSON.parse(textOf(res))).toEqual({ checkpointed: false });
+});
+
+// ---- EmitRefusedError surfaces as a clean tool error, not a crash --------------
+
+test("write against a target with a broken managed-block surfaces EmitRefusedError as a clean tool error", async () => {
+  const repoPath = await tmpRepo();
+  // No markers at all: emitDraft's validation pass throws EmitRefusedError before
+  // any write happens (ADR 004) — the write tool must turn that into isError
+  // content, not an uncaught crash, and must not touch the file.
+  const original = "# Hand-authored AGENTS.md\n\nNo managed block here.\n";
+  await writeFile(join(repoPath, "AGENTS.md"), original, "utf8");
+
+  const manager = new StubJobManager();
+  const client = await connectedClient(manager);
+  await client.callTool({ name: "mine", arguments: { repo: "octo/repo", intent: "x", repoPath } });
+  manager.completeToReady({ draft: mkDraft([]), provenance: mkProvenance([mkRule()]), contested: [] });
+  const preview = JSON.parse(textOf(await client.callTool({ name: "preview", arguments: {} })));
+  expect(preview.targetExists).toBe(true);
+  expect(preview.wouldRefuse).toBe(true);
+
+  const writeRes = await client.callTool({ name: "write", arguments: { confirmToken: preview.confirmToken } });
+  expect(writeRes.isError).toBe(true);
+  expect(textOf(writeRes)).toMatch(/refus/i);
+  expect(await readFile(join(repoPath, "AGENTS.md"), "utf8")).toBe(original);
 });
