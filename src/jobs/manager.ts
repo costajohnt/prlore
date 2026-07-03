@@ -213,7 +213,13 @@ export class JobManager {
       stateDir: deps.stateDir,
       onPr: (pr) => extractor.enqueue(pr),
     });
-    this.mergeStatus(job, { counters: { ...job.status.counters, ...numericCounters(fetchSummary) } });
+    // Merge both the checkpoint's own persisted counters (e.g. botCommentsStripped,
+    // which never surfaces on FetchSummary) and the summary's computed fields (e.g.
+    // drifted, which isn't a raw checkpoint counter) — status exposes the union.
+    const cpAfterFetch = await loadCheckpoint(deps.stateDir, now);
+    this.mergeStatus(job, {
+      counters: { ...job.status.counters, ...(cpAfterFetch?.counters ?? {}), ...numericCounters(fetchSummary) },
+    });
     if (this.checkCancel(job)) return;
 
     // Step 2.5: post-fetch corpus sweep. The streaming onPr hook covers PRs fetched
