@@ -1,6 +1,10 @@
+import { createRequire } from "node:module";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { JobManager, type JobManagerApi } from "./jobs/manager.js";
 import { registerTools, type MineDepsFactory } from "./server-tools.js";
+
+// Resolves to the repo root from src/ and the package root from dist/.
+const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
 
 // Phase 1 pinned `buildServer()` (no args) as the default-construction contract —
 // that default now boots a real JobManager instead of the old status-only
@@ -13,7 +17,7 @@ export function buildServer(
   manager: JobManagerApi = new JobManager(),
   depsFactory?: MineDepsFactory,
 ): McpServer {
-  const server = new McpServer({ name: "prlore", version: "0.0.0" });
+  const server = new McpServer({ name: "prlore", version });
   registerTools(server, manager, depsFactory);
   return server;
 }

@@ -1,6 +1,6 @@
 {
   "name": "prlore",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Mine a repo's PR-review history and current code into a portable AGENTS.md conventions file",
   "license": "MIT",
   "type": "module",
@@ -30,5 +30,13 @@
     "msw": "^2.14.6",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/costajohnt/prlore.git"
+  },
+  "bugs": {
+    "url": "https://github.com/costajohnt/prlore/issues"
+  },
+  "homepage": "https://github.com/costajohnt/prlore#readme"
 }
