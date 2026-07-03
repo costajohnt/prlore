@@ -7,7 +7,7 @@ import { makeTransport, resolveToken, withRetry } from "./github/client.js";
 import { emitDraft, EmitRefusedError, type EmitTarget } from "./emitter/emit.js";
 import { checkMarkers, isMarkerIssue, sanitize } from "./emitter/markers.js";
 import type { JobDeps, JobManagerApi } from "./jobs/manager.js";
-import { AnthropicProvider } from "./model/anthropic.js";
+import { hasClaudeCli, selectProvider } from "./model/select-provider.js";
 import { CONTESTED_HEADER } from "./reconciler/render.js";
 import { MineConfigSchema, type MineConfig } from "./schemas/mine-config.js";
 import type { ContestedItem, Provenance } from "./schemas/provenance.js";
@@ -28,7 +28,16 @@ export type MineDepsFactory = (
 export const defaultMineDepsFactory: MineDepsFactory = async (config, { repoPath, stateDir }) => {
   const token = await resolveToken();
   const transport = withRetry(makeTransport(token, config.baseUrl));
-  const provider = new AnthropicProvider({ model: config.model.model, maxBudgetUsd: config.model.maxBudgetUsd });
+  // onNotice routing: JobDeps (jobs/manager.ts) carries no notice/warning channel —
+  // JobStatus.warnings lives on the RunningJob that JobManager.start() constructs,
+  // and that happens strictly AFTER this factory returns (deps are built, then
+  // passed into manager.start()). There is no live status object to append to at
+  // this point, so there's nothing to route into. Falling back to stderr keeps the
+  // notice visible via the same out-of-band channel the CLI/MCP host already treats
+  // as diagnostic output (see Global Constraints: "progress → stderr").
+  const provider = selectProvider(config.model, process.env, hasClaudeCli, (msg) => {
+    process.stderr.write(`prlore: ${msg}\n`);
+  });
   return { transport, provider, stateDir, repoPath };
 };
 

@@ -20,7 +20,14 @@ export const MineConfigSchema = z.object({
     .prefault({}),
   model: z
     .object({
-      provider: z.enum(["anthropic", "sampling"]).default("anthropic"),
+      // "auto" (the default) resolves to "anthropic" whenever ANTHROPIC_API_KEY is
+      // set — which is every config that used to omit `provider` and get the old
+      // "anthropic" default, since AnthropicProvider was never reachable without a
+      // key anyway. So the observed behavior of every pre-existing config is
+      // unchanged by this default flip; see selectProvider() in
+      // src/model/select-provider.ts for the resolution logic and the "sampling"
+      // hard-error, which still lives at the mine tool layer (src/server-tools.ts).
+      provider: z.enum(["anthropic", "claude-cli", "sampling", "auto"]).default("auto"),
       model: z.string().optional(),
       maxBudgetUsd: z.number().positive().default(10),
     })

@@ -34,9 +34,10 @@ clone, not a bare `owner/name` reference.
 - `GITHUB_TOKEN` — a GitHub token with read access to the target repo. If
   unset, prlore falls back to `gh auth token` (requires the `gh` CLI to be
   authenticated).
-- `ANTHROPIC_API_KEY` — used by the default Anthropic model provider (the
+- `ANTHROPIC_API_KEY` — used by the Anthropic model provider (the
   `@anthropic-ai/sdk` client reads this directly; no prlore-specific wiring
-  needed).
+  needed). This remains the documented default for CI and servers, where
+  there's no interactive Claude Code session to draw on.
 
 ### The five tools + the interview prompt
 
@@ -64,11 +65,25 @@ works cold.
   with a warning; once tripped during synthesis (the highest-value calls), the
   job fails outright rather than emitting a truncated conventions doc.
 
-`model.provider` also accepts `"sampling"` in the config schema (MCP sampling
-as a fallback when no API key is configured), but that path isn't wired yet.
-`mine` rejects `provider: "sampling"` with a tool error rather than silently
-running the Anthropic provider in its place — use `"anthropic"` (the default)
-until sampling support ships.
+`model.provider` selects which model backend runs the mining calls:
+
+- `"auto"` (the default) — uses the Anthropic API if `ANTHROPIC_API_KEY` is
+  set; otherwise falls back to the local `claude` CLI if it's on PATH; errors
+  naming both remedies if neither is available.
+- `"anthropic"` — always uses the Anthropic API. Requires
+  `ANTHROPIC_API_KEY`; fails immediately with a clear error if it's unset
+  (rather than failing deep inside the pipeline on the first call).
+- `"claude-cli"` — always uses your locally installed, already-authenticated
+  Claude Code CLI in headless mode. No API key needed, but usage draws on
+  your Claude subscription's usage limits, not billed API credits. Its
+  default model is whatever the `claude` CLI itself defaults to (prlore
+  doesn't override it unless `model.model` is set); the Anthropic provider's
+  default is `claude-sonnet-5` (see `src/model/anthropic.ts` for the current
+  price table).
+- `"sampling"` also exists in the config schema (MCP sampling as a fallback
+  when no API key is configured), but that path isn't wired yet. `mine`
+  rejects `provider: "sampling"` with a tool error rather than silently
+  running another provider in its place.
 
 ## Development
 

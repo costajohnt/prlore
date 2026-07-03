@@ -9,7 +9,7 @@ test("MineConfig applies spec defaults from minimal input", () => {
   expect(c.baseUrl).toBe("https://api.github.com");
   expect(c.timeRange.maxPrs).toBe(1500);
   expect(c.output).toEqual({ target: "AGENTS.md", layout: "auto", citations: "inline-light" });
-  expect(c.model.provider).toBe("anthropic");
+  expect(c.model.provider).toBe("auto");
   expect(c.model.maxBudgetUsd).toBe(10);
 });
 
