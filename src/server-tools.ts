@@ -66,7 +66,12 @@ async function refusalPreflight(repoPath: string, target: string): Promise<{ tar
 // cut point. v1-simple per the plan: no re-render, just string surgery on the
 // already-rendered draft.
 function finalizeDraft(draft: string, resolvedStatements: string[]): string {
-  const idx = draft.indexOf(CONTESTED_HEADER);
+  // lastIndexOf, not indexOf: a rule's statement is untrusted, PR-derived text and
+  // may itself contain the literal header substring. render.ts guarantees the real
+  // heading is always the LAST occurrence (at most one genuine heading is ever
+  // emitted) — anchoring to the first match would let a poisoned statement
+  // silently truncate every rule and section that follows it.
+  const idx = draft.lastIndexOf(CONTESTED_HEADER);
   const base = (idx === -1 ? draft : draft.slice(0, idx)).replace(/\n+$/, "");
   const withResolved =
     resolvedStatements.length === 0
@@ -226,26 +231,38 @@ export function registerTools(server: McpServer, manager: JobManagerApi): void {
           throw new Error("no mine target on record — call mine before write");
         }
 
+        // Clear-before-await, not clear-after: the token check above and this
+        // clear must be one synchronous unit with no `await` between them, or two
+        // concurrent write calls sharing the same token can both pass the check
+        // before either clears it (TOCTOU). Capture everything this handler still
+        // needs from previewState into locals first, since previewState itself is
+        // about to go null. A write that fails downstream (emitDraft throwing)
+        // does NOT get the token back — a failed write already consumed it, and
+        // the caller re-previews for a fresh one, same as any other stale-token
+        // path.
+        const { draft, provenance, contested } = previewState;
+        const target = lastMineTarget;
+        previewState = null; // single-use: consumed synchronously, before any await
+
         // A resolved id applies everywhere it appears among this job's contested
         // items (conflict chains can surface the same rule id in more than one
         // item) — filtering the full contested list against the keep-id set
         // already covers every occurrence, not just the first.
         const keepIds = new Set((resolveContested ?? []).filter((r) => r.action === "keep").map((r) => r.id));
-        const resolvedStatements = previewState.contested
+        const resolvedStatements = contested
           .filter((item) => keepIds.has(item.id))
           .map((item) => item.statement);
 
-        const finalDraft = finalizeDraft(previewState.draft, resolvedStatements);
+        const finalDraft = finalizeDraft(draft, resolvedStatements);
 
         let result;
         try {
-          result = await emitDraft(finalDraft, previewState.provenance, lastMineTarget);
+          result = await emitDraft(finalDraft, provenance, target);
         } catch (err) {
           if (err instanceof EmitRefusedError) throw new Error(err.message);
           throw err;
         }
 
-        previewState = null; // single-use: a repeat write needs a fresh preview
         return jsonContent({ pathsWritten: result.pathsWritten });
       } catch (err) {
         return toolError(err);
