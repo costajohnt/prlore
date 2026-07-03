@@ -155,6 +155,14 @@ export function registerTools(
         const repoPath = repoPathIn ?? process.cwd();
         const stateDir = stateDirIn ?? join(repoPath, ".prlore");
         const config = MineConfigSchema.parse(configFields);
+        // MineConfigSchema accepts "sampling" (MCP sampling as a fallback when no
+        // API key is configured) but v1 never wired that path — defaultMineDepsFactory
+        // always constructs a real AnthropicProvider regardless of this field. Silently
+        // running Anthropic under a config that asked for sampling would be a lie the
+        // caller has no way to detect; fail closed with a clear tool error instead.
+        if (config.model.provider === "sampling") {
+          throw new Error('model.provider "sampling" is not implemented in v1; use "anthropic"');
+        }
         const deps = await depsFactory(config, { repoPath, stateDir });
 
         const { jobId, resumed } = manager.start(config, deps);

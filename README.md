@@ -65,8 +65,10 @@ works cold.
   job fails outright rather than emitting a truncated conventions doc.
 
 `model.provider` also accepts `"sampling"` in the config schema (MCP sampling
-as a fallback when no API key is configured), but that path isn't wired yet —
-prlore v1 always constructs the Anthropic provider directly.
+as a fallback when no API key is configured), but that path isn't wired yet.
+`mine` rejects `provider: "sampling"` with a tool error rather than silently
+running the Anthropic provider in its place — use `"anthropic"` (the default)
+until sampling support ships.
 
 ## Development
 

@@ -326,6 +326,22 @@ test("mine surfaces a running-job rejection as a tool error, not a crash", async
   expect(textOf(res)).toMatch(/already running/i);
 });
 
+test('mine rejects model.provider "sampling" as a clean tool error instead of silently running Anthropic', async () => {
+  const repoPath = await tmpRepo();
+  const manager = new StubJobManager();
+  const client = await connectedClient(manager);
+
+  const res = await client.callTool({
+    name: "mine",
+    arguments: { repo: "octo/repo", intent: "x", repoPath, model: { provider: "sampling" } },
+  });
+
+  expect(res.isError).toBe(true);
+  expect(textOf(res)).toMatch(/sampling/i);
+  expect(textOf(res)).toMatch(/anthropic/i);
+  expect(manager.startCalls).toHaveLength(0); // rejected before the pipeline (and any provider) ever starts
+});
+
 // ---- preview before ready-for-preview -----------------------------------------
 
 test("preview before the job reaches ready-for-preview is a clean tool error", async () => {
