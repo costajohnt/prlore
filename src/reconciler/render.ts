@@ -7,7 +7,7 @@ const MAX_CITATIONS = 3;
 
 // The literal text of the contested-section header (see the "## Needs your call
 // (contested)" push below). Exported so consumers that need to recognize the
-// genuine header line (e.g. server-tools.ts's finalizeDraft, which anchors its
+// genuine header line (e.g. src/emitter/finalize.ts's finalizeDraft, which anchors its
 // contested-section strip to a full-line match of this text) derive it from the
 // same source of truth instead of hardcoding a second copy that could drift.
 export const CONTESTED_HEADER = "Needs your call (contested)";
@@ -20,7 +20,7 @@ export const CONTESTED_HEADER = "Needs your call (contested)";
 // "## Needs your call (contested)": this poisoned section heading (which always
 // renders earlier, since sections come before the contested block) and the
 // genuine header. A consumer that locates "the" contested header by the first
-// full-line match (finalizeDraft in server-tools.ts) would then anchor to the
+// full-line match (finalizeDraft in src/emitter/finalize.ts) would then anchor to the
 // poisoned line and treat everything after it — every later section plus the
 // real contested block — as past the cut point, silently dropping it from the
 // written file (a fail-closed under-write: preview shows more than gets

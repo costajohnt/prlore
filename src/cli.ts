@@ -256,13 +256,13 @@ export async function runMineCli(argv: string[], deps: CliDeps): Promise<number>
   );
 
   if (parsed.dryRun) {
-    deps.stdout.write("dry run: not written\n");
+    deps.stderr.write("dry run: not written\n");
     return 0;
   }
 
   const shouldWrite = parsed.yes ? true : await deps.confirm(`Write ${config.output.target}?`);
   if (!shouldWrite) {
-    deps.stdout.write("not written\n");
+    deps.stderr.write("not written\n");
     return 0;
   }
 
@@ -274,7 +274,7 @@ export async function runMineCli(argv: string[], deps: CliDeps): Promise<number>
 
   try {
     const emitResult = await emitDraft(finalDraft, result.provenance, target);
-    deps.stdout.write(`wrote: ${emitResult.pathsWritten.join(", ")}\n`);
+    deps.stderr.write(`wrote: ${emitResult.pathsWritten.join(", ")}\n`);
     return 0;
   } catch (err) {
     if (err instanceof EmitRefusedError) {

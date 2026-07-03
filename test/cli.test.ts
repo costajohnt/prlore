@@ -265,9 +265,14 @@ test("happy flow: polls to ready, prints preview, writes after confirm=true, exi
   const written = await readFile(join(repoPath, "AGENTS.md"), "utf8");
   expect(written).toContain("Always write tests first");
 
-  // stdout reports pathsWritten
-  expect(out()).toMatch(/AGENTS\.md/);
-  expect(out()).toContain(join(repoPath, "AGENTS.md"));
+  // "wrote:" status line went to stderr, not stdout (stdout is draft-only for piping)
+  expect(err()).toMatch(/wrote.*AGENTS\.md/);
+  expect(err()).toContain(join(repoPath, "AGENTS.md"));
+  expect(out()).not.toMatch(/wrote/i);
+
+  // stdout contains draft content, no trailing status lines
+  expect(out()).toContain("Always write tests first");
+  expect(out()).not.toMatch(/wrote|not written|dry.run/i);
 
   // progress line(s) went to stderr
   expect(err()).toMatch(/fetching/);
@@ -276,7 +281,7 @@ test("happy flow: polls to ready, prints preview, writes after confirm=true, exi
 test("confirm=false -> emitDraft is never called, exit 0, output says not written", async () => {
   const repoPath = await tmpRepo();
   const manager = new ScriptedJobManager([readyStatus()], { draft: mkDraft([]), provenance: mkProvenance([mkRule()]), contested: [] });
-  const { stdout, stderr, out } = streams();
+  const { stdout, stderr, out, err } = streams();
   const confirm = vi.fn(async () => false);
 
   const code = await runMineCli(baseArgv("octo/repo", repoPath), {
@@ -291,13 +296,17 @@ test("confirm=false -> emitDraft is never called, exit 0, output says not writte
   expect(code).toBe(0);
   expect(confirm).toHaveBeenCalledTimes(1);
   expect(emitDraft).not.toHaveBeenCalled();
-  expect(out()).toMatch(/not written/i);
+  // "not written" status goes to stderr, stdout is draft-only
+  expect(err()).toMatch(/not written/i);
+  expect(out()).not.toMatch(/not written/i);
+  // stdout contains draft content, no status lines
+  expect(out()).toContain("Always write tests first");
 });
 
 test("--dry-run never calls emitDraft even with --yes, exit 0", async () => {
   const repoPath = await tmpRepo();
   const manager = new ScriptedJobManager([readyStatus()], { draft: mkDraft([]), provenance: mkProvenance([mkRule()]), contested: [] });
-  const { stdout, stderr, out } = streams();
+  const { stdout, stderr, out, err } = streams();
   const confirm = vi.fn(async () => true);
 
   const code = await runMineCli(baseArgv("octo/repo", repoPath, ["--dry-run", "--yes"]), {
@@ -312,7 +321,11 @@ test("--dry-run never calls emitDraft even with --yes, exit 0", async () => {
   expect(code).toBe(0);
   expect(confirm).not.toHaveBeenCalled(); // --dry-run short-circuits before the confirm gate
   expect(emitDraft).not.toHaveBeenCalled();
-  expect(out()).toMatch(/dry.run/i);
+  // "dry run: not written" status goes to stderr, stdout is draft-only
+  expect(err()).toMatch(/dry.run/i);
+  expect(out()).not.toMatch(/dry.run/i);
+  // stdout contains draft content, no status lines
+  expect(out()).toContain("Always write tests first");
 });
 
 test("--yes skips the confirm prompt and writes directly", async () => {
