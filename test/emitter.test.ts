@@ -219,6 +219,60 @@ test("auto layout falls back to single when the draft is under the line threshol
   expect(root).toContain("short draft");
 });
 
+// ---- Fix (per-area escape): untrusted scope segments must stay inside repoPath --
+//
+// Area names come from `rule.scope[]`'s first path segment — untrusted,
+// model-derived text. Without an allowlist, "." resolves to repoPath itself
+// (its "area" stub write silently clobbers the freshly written root managed
+// content) and ".." resolves to repoPath's parent (its stub write lands
+// OUTSIDE repoPath entirely) — both are real, existing directories, so
+// existingDirs' bare stat-and-check alone can't catch either case.
+
+test("Fix (per-area escape): a scope segment of '..' does not escape repoPath — no file is written to the parent directory", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "prlore-emit-escape-"));
+  const repoPath = join(parent, "repo");
+  await mkdir(repoPath, { recursive: true });
+
+  const evilRule = mkRule({ id: "e1", statement: "Escape rule", scope: ["../evil.ts"] });
+  const provenance = mkProvenance([evilRule]);
+
+  await emitDraft("# Conventions\n\nbody\n", provenance, { repoPath, target: "AGENTS.md", layout: "per-area" });
+
+  // The unfixed code resolves ".." to `parent` (a real, existing directory —
+  // it's repoPath's own parent) and writes the area stub there.
+  await expect(stat(join(parent, "AGENTS.md"))).rejects.toThrow();
+});
+
+test("Fix (per-area escape): a scope segment of '.' does not clobber the root target's managed content", async () => {
+  const repoPath = await tmpRepo();
+  const dotRule = mkRule({ id: "d1", statement: "Dot rule", scope: ["./whatever.ts"] });
+  const provenance = mkProvenance([dotRule]);
+
+  await emitDraft("# Conventions\n\nRoot body text that must survive.\n", provenance, {
+    repoPath,
+    target: "AGENTS.md",
+    layout: "per-area",
+  });
+
+  const root = await readFile(join(repoPath, "AGENTS.md"), "utf8");
+  expect(root).toContain("Root body text that must survive.");
+  // The unfixed code resolves "." to repoPath itself, so its area-stub write
+  // (this exact body) overwrites the root managed content just written above.
+  expect(root).not.toContain("Conventions for .");
+});
+
+test("Fix (per-area escape): a normal path segment still produces its area stub (allowlist isn't overly strict)", async () => {
+  const repoPath = await tmpRepo();
+  await mkdir(join(repoPath, "src"), { recursive: true });
+  const rule = mkRule({ id: "s1", statement: "Normal area rule", scope: ["src/foo.ts"] });
+  const provenance = mkProvenance([rule]);
+
+  await emitDraft("# Conventions\n\nbody\n", provenance, { repoPath, target: "AGENTS.md", layout: "per-area" });
+
+  const stub = await readFile(join(repoPath, "src", "AGENTS.md"), "utf8");
+  expect(stub).toContain("Normal area rule");
+});
+
 test("auto layout switches to per-area when the draft exceeds 400 lines", async () => {
   const repoPath = await tmpRepo();
   await mkdir(join(repoPath, "auth"), { recursive: true });

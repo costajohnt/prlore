@@ -1,5 +1,5 @@
 import { readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import type { Provenance, RuleRecord } from "../schemas/provenance.js";
 import { atomicWriteFile } from "../state/atomic.js";
 
@@ -99,15 +99,40 @@ async function computeManagedContent(path: string, body: string): Promise<string
   return `${prefix}${coreBlock(body)}${suffix}`;
 }
 
+// A rule's `scope` entries are untrusted, model-derived text — the first path
+// segment becomes a directory name we join onto repoPath and write into.
+// Without an allowlist, "." resolves (via existingDirs' stat) to repoPath
+// itself, so its "area" stub write silently clobbers the freshly written root
+// managed content; ".." resolves to repoPath's parent, so its stub write
+// lands OUTSIDE repoPath entirely. Both are directories that legitimately
+// exist, so existingDirs' bare stat-and-check can't catch them — only an
+// allowlist on the segment's shape can. `\w.-` covers ordinary path-segment
+// names (letters, digits, underscore, dot, hyphen) while still rejecting the
+// exact "." / ".." tokens and anything carrying a "/" or other escape
+// character.
+function isSafeAreaSegment(segment: string): boolean {
+  return segment !== "." && segment !== ".." && /^[\w.-]+$/.test(segment);
+}
+
 function areaFirstSegments(rules: RuleRecord[]): string[] {
   const segments = new Set<string>();
   for (const rule of rules) {
     for (const scope of rule.scope) {
       const first = scope.split("/")[0];
-      if (first) segments.add(first);
+      if (first && isSafeAreaSegment(first)) segments.add(first);
     }
   }
   return [...segments];
+}
+
+// Belt-and-braces on top of isSafeAreaSegment: confirms the resolved stub
+// path is a strict descendant of repoPath before anything is ever written
+// there. Kept as a second, independent check (not a replacement for the
+// allowlist) so a future change to the allowlist regex can't reopen the
+// escape on its own.
+function isInsideRepo(repoPath: string, candidatePath: string): boolean {
+  const rel = relative(resolve(repoPath), resolve(candidatePath));
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
 async function existingDirs(repoPath: string, candidates: string[]): Promise<string[]> {
@@ -116,8 +141,10 @@ async function existingDirs(repoPath: string, candidates: string[]): Promise<str
     try {
       const s = await stat(join(repoPath, candidate));
       if (s.isDirectory()) out.push(candidate);
-    } catch {
-      // not present, or not a directory — not an area
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") continue; // not present, or not a directory — not an area
+      throw err; // anything else (EACCES, etc.) is a real failure, not "not an area"
     }
   }
   return out;
@@ -181,7 +208,13 @@ export async function emitDraft(
       ? [{ path: targetPath, body: draft }]
       : await (async () => {
           const segments = areaFirstSegments(provenance.rules);
-          const areas = await existingDirs(repoPath, segments);
+          const candidateAreas = await existingDirs(repoPath, segments);
+          // Second, independent gate (see isInsideRepo doc comment): drop —
+          // never throw — any area whose resolved stub path would land
+          // outside repoPath. A dropped area is excluded from BOTH the stub
+          // write and the root's "## Areas" links, so the two never disagree
+          // about which areas exist.
+          const areas = candidateAreas.filter((area) => isInsideRepo(repoPath, join(repoPath, area, target)));
           return [
             { path: targetPath, body: withAreaLinks(draft, areas, target) },
             ...areas.map((area) => ({

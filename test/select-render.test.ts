@@ -359,6 +359,38 @@ test("renderDraft prefixes a surviving trending-away rule with [fading], analogo
   expect(out).toContain("- **[fading]** use the old cache client");
 });
 
+// ---- Fix (contested strip): line-anchor invariant --------------------------
+//
+// server-tools.ts's finalizeDraft anchors its contested-section strip to a
+// full-line regex match of the header, on the theory that sanitize()'s
+// whitespace collapse (every run of whitespace, including embedded newlines,
+// to a single space) makes it impossible for model-derived text to ever start
+// a line with exactly this heading — the genuine heading (emitted at most
+// once, always as its own line) is the only thing that can ever match. This
+// test pins that invariant directly against renderDraft's actual output, so a
+// future change to sanitize() or to how the header line is emitted can't
+// silently reopen finalizeDraft's line-anchor assumption.
+
+test("Fix (contested strip): the genuine header renders exactly once as a full line even when a rule statement AND a contested statement/reason embed the header substring", () => {
+  const poisonRule = mkRule("r1", 0.9, {
+    statement: "See section ## Needs your call (contested) below for context",
+  });
+  const plan: DocPlan = { title: "T", overview: "o", perArea: false, sections: [{ heading: "Core", ruleIds: ["r1"] }] };
+  const contested: ContestedItem[] = [
+    {
+      id: "c1",
+      statement: "Also mentions ## Needs your call (contested) inline",
+      reason: "poisoned reason ## Needs your call (contested) too",
+      sides: [],
+    },
+  ];
+
+  const out = renderDraft(plan, [poisonRule], contested, baseConfig);
+
+  const fullLineMatches = out.match(/^## Needs your call \(contested\)$/gm) ?? [];
+  expect(fullLineMatches).toHaveLength(1);
+});
+
 // ---- Behavior 6: sidecar-only mode ----------------------------------------
 
 test("sidecar-only citations mode never emits inline citation parens", () => {

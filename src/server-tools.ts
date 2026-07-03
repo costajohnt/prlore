@@ -36,7 +36,21 @@ export const defaultMineDepsFactory: MineDepsFactory = async (config, { repoPath
 // src/reconciler/render.ts and src/emitter/emit.ts.
 const BEGIN = "<!-- prlore:begin -->";
 const END = "<!-- prlore:end -->";
-const CONTESTED_HEADER = "## Needs your call (contested)";
+// Line-anchored, not a bare substring: a contested item's statement is
+// untrusted, PR-derived text and may itself contain the literal header
+// substring. render.ts's sanitize() collapses every run of whitespace
+// (including embedded newlines — JS `\s` covers \n, \r, and the Unicode line
+// separators) in every interpolated field to a single space before it ever
+// reaches the draft, and the only place a contested item's text lands is
+// inside a `- ${statement} — ${reason}` bullet. That means model-derived text
+// can never start a line with exactly this heading — the genuine heading
+// (render.ts emits it at most once) is the only thing that can ever match a
+// full line. Anchoring here, instead of lastIndexOf on the bare substring, is
+// what keeps a poisoned CONTESTED statement (whose text sits AFTER the real
+// header in the rendered draft) from being mistaken for the genuine
+// occurrence and causing the strip to keep the header plus every unresolved
+// contested bullet ahead of the poisoned one.
+const CONTESTED_HEADER_LINE = /^## Needs your call \(contested\)$/m;
 
 // Same untrusted-text threat model as render.ts/emit.ts: a contested item's
 // statement is model-derived text landing in markdown we write to disk.
@@ -86,13 +100,8 @@ async function refusalPreflight(repoPath: string, target: string): Promise<{ tar
 // cut point. v1-simple per the plan: no re-render, just string surgery on the
 // already-rendered draft.
 function finalizeDraft(draft: string, resolvedStatements: string[]): string {
-  // lastIndexOf, not indexOf: a rule's statement is untrusted, PR-derived text and
-  // may itself contain the literal header substring. render.ts guarantees the real
-  // heading is always the LAST occurrence (at most one genuine heading is ever
-  // emitted) — anchoring to the first match would let a poisoned statement
-  // silently truncate every rule and section that follows it.
-  const idx = draft.lastIndexOf(CONTESTED_HEADER);
-  const base = (idx === -1 ? draft : draft.slice(0, idx)).replace(/\n+$/, "");
+  const match = CONTESTED_HEADER_LINE.exec(draft);
+  const base = (match === null ? draft : draft.slice(0, match.index)).replace(/\n+$/, "");
   const withResolved =
     resolvedStatements.length === 0
       ? base
