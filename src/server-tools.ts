@@ -7,8 +7,28 @@ import { makeTransport, resolveToken, withRetry } from "./github/client.js";
 import { emitDraft, EmitRefusedError, type EmitTarget } from "./emitter/emit.js";
 import type { JobDeps, JobManagerApi } from "./jobs/manager.js";
 import { AnthropicProvider } from "./model/anthropic.js";
-import { MineConfigSchema } from "./schemas/mine-config.js";
+import { MineConfigSchema, type MineConfig } from "./schemas/mine-config.js";
 import type { ContestedItem, Provenance } from "./schemas/provenance.js";
+
+// Phase 6 Task 5 seam: `mine`'s real wiring (resolveToken -> withRetry(makeTransport) +
+// a real AnthropicProvider) reaches out to GitHub and Anthropic — no way to inject a
+// fake transport/provider around it from a test without this factory indirection. This
+// is the ONLY change Task 5 needed in src/ to drive the full MCP tool surface
+// (mine -> status -> preview -> write) against a real JobManager with just network+LLM
+// faked, instead of forking the pipeline logic into the test. Defaults to the exact
+// wiring `mine` used inline before this change; production callers (src/index.ts via
+// buildServer()) are unaffected.
+export type MineDepsFactory = (
+  config: MineConfig,
+  ctx: { repoPath: string; stateDir: string },
+) => JobDeps | Promise<JobDeps>;
+
+export const defaultMineDepsFactory: MineDepsFactory = async (config, { repoPath, stateDir }) => {
+  const token = await resolveToken();
+  const transport = withRetry(makeTransport(token, config.baseUrl));
+  const provider = new AnthropicProvider({ model: config.model.model, maxBudgetUsd: config.model.maxBudgetUsd });
+  return { transport, provider, stateDir, repoPath };
+};
 
 // Same markers ADR 004 pins in src/emitter/emit.ts — duplicated here (not imported)
 // so the preview-only refusal preflight below stays a read-only peek, scoped to this
@@ -95,7 +115,11 @@ interface PreviewState {
   contested: ContestedItem[];
 }
 
-export function registerTools(server: McpServer, manager: JobManagerApi): void {
+export function registerTools(
+  server: McpServer,
+  manager: JobManagerApi,
+  depsFactory: MineDepsFactory = defaultMineDepsFactory,
+): void {
   let lastMineTarget: EmitTarget | null = null;
   let previewState: PreviewState | null = null;
 
@@ -115,11 +139,7 @@ export function registerTools(server: McpServer, manager: JobManagerApi): void {
         const repoPath = repoPathIn ?? process.cwd();
         const stateDir = stateDirIn ?? join(repoPath, ".prlore");
         const config = MineConfigSchema.parse(configFields);
-
-        const token = await resolveToken();
-        const transport = withRetry(makeTransport(token, config.baseUrl));
-        const provider = new AnthropicProvider({ model: config.model.model, maxBudgetUsd: config.model.maxBudgetUsd });
-        const deps: JobDeps = { transport, provider, stateDir, repoPath };
+        const deps = await depsFactory(config, { repoPath, stateDir });
 
         const { jobId, resumed } = manager.start(config, deps);
         lastMineTarget = { repoPath, target: config.output.target, layout: config.output.layout };

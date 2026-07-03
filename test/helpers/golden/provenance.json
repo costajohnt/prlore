@@ -1,0 +1,72 @@
+{
+  "generatedAt": "2026-07-01T00:00:00.000Z",
+  "intent": "help a new contributor learn our conventions",
+  "rules": [
+    {
+      "id": "1",
+      "statement": "Use newApi for all new modules",
+      "category": "architecture",
+      "polarity": "prescriptive",
+      "scope": [],
+      "score": 0.4895216066484602,
+      "verdict": "corroborated",
+      "evidence": [
+        {
+          "pr": 201,
+          "author": "bob",
+          "association": "OWNER",
+          "quote": "We should always use newApi for all new modules going forward.",
+          "createdAt": "2026-06-20T00:00:00Z",
+          "verified": true
+        }
+      ],
+      "exemplars": [],
+      "lastCorroborated": "2026-07-01T00:00:00.000Z"
+    },
+    {
+      "id": "2",
+      "statement": "Migrate away from oldApi toward newApi",
+      "category": "architecture",
+      "polarity": "proscriptive",
+      "scope": [],
+      "score": 0.44483130915880326,
+      "verdict": "trending-toward",
+      "evidence": [
+        {
+          "pr": 202,
+          "author": "bob",
+          "association": "OWNER",
+          "quote": "Let's keep migrating away from oldApi toward newApi across the codebase.",
+          "createdAt": "2026-06-25T00:00:00Z",
+          "verified": true
+        }
+      ],
+      "exemplars": [],
+      "lastCorroborated": "2026-07-01T00:00:00.000Z"
+    }
+  ],
+  "dropped": [
+    {
+      "id": "0",
+      "statement": "Always use oldApi for widgets",
+      "category": "style",
+      "polarity": "prescriptive",
+      "scope": [],
+      "score": 0.007150313548329613,
+      "verdict": "trending-away",
+      "evidence": [
+        {
+          "pr": 203,
+          "author": "dave",
+          "association": "CONTRIBUTOR",
+          "quote": "Always use oldApi for widgets in the legacy code.",
+          "createdAt": "2023-06-01T00:00:00Z",
+          "verified": true
+        }
+      ],
+      "exemplars": [],
+      "lastCorroborated": null
+    }
+  ],
+  "contested": []
+}
