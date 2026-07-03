@@ -71,7 +71,7 @@ export class AnthropicProvider implements ModelProvider {
   }
 }
 
-function extractJson(text: string): string {
+export function extractJson(text: string): string {
   const start = text.search(/[[{]/);
   if (start === -1) return text;
   let depth = 0;
