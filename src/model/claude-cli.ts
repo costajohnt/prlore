@@ -70,7 +70,7 @@ export class ClaudeCliProvider implements ModelProvider {
 
       const envelope = JSON.parse(stdout) as ClaudeCliEnvelope;
       const rawCost = envelope.total_cost_usd;
-      const validCost = typeof rawCost === "number" && Number.isFinite(rawCost);
+      const validCost = typeof rawCost === "number" && Number.isFinite(rawCost) && rawCost >= 0;
       if (!validCost) {
         this.opts.onWarn?.("claude CLI response missing or invalid total_cost_usd; booked $0");
       }

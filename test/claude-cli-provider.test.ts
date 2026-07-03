@@ -139,3 +139,12 @@ test("non-finite total_cost_usd books 0 and fires onWarn, never NaN", async () =
   expect(Number.isNaN(p.spentUsd())).toBe(false);
   expect(onWarn).toHaveBeenCalledTimes(1);
 });
+
+test("negative total_cost_usd books 0 and fires onWarn, maintains monotonicity", async () => {
+  const run = fakeRunCli([{ result: '{"answer":"a"}', total_cost_usd: -5 }]);
+  const onWarn = vi.fn();
+  const p = new ClaudeCliProvider({ maxBudgetUsd: 10, onWarn }, run as unknown as RunCli);
+  await expect(p.complete({ prompt: "q", schema })).resolves.toEqual({ answer: "a" });
+  expect(p.spentUsd()).toBe(0);
+  expect(onWarn).toHaveBeenCalledTimes(1);
+});
