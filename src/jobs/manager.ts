@@ -45,6 +45,18 @@ export interface JobResult {
   contested: ContestedItem[];
 }
 
+// Public surface the MCP tool layer (src/server-tools.ts) programs against, so tests
+// can inject a stub structurally compatible with JobManager. A class with private
+// fields (JobManager.job below) is otherwise only assignable from itself/subclasses,
+// never from a plain object literal — this interface only lists the public methods,
+// so any object shaped like it (real or stub) satisfies it.
+export interface JobManagerApi {
+  start(config: MineConfig, deps: JobDeps): { jobId: string; resumed: boolean };
+  status(jobId?: string): JobStatus;
+  cancel(jobId: string): Promise<{ checkpointed: boolean }>;
+  result(jobId: string): JobResult | null;
+}
+
 const CHECKPOINT_FILE = "checkpoint.json";
 
 interface RunningJob {
@@ -97,7 +109,7 @@ function defaultExcludes(config: MineConfig): string[] {
  * contract — so tests can await the detached pipeline's completion deterministically
  * instead of polling with sleeps.
  */
-export class JobManager {
+export class JobManager implements JobManagerApi {
   private job: RunningJob | null = null;
 
   start(config: MineConfig, deps: JobDeps): { jobId: string; resumed: boolean } {
