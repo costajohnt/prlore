@@ -1,5 +1,11 @@
 #!/usr/bin/env node
-import { accessSync, constants as fsConstants, createReadStream, realpathSync } from "node:fs";
+import {
+  accessSync,
+  constants as fsConstants,
+  createReadStream,
+  realpathSync,
+  type ReadStream,
+} from "node:fs";
 import { createInterface } from "node:readline/promises";
 import type { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -30,7 +36,7 @@ export interface MainIo {
 // process.stdin when /dev/tty isn't accessible (Windows, non-interactive CI).
 // Not covered by the automated suite — driving a real TTY prompt from vitest
 // isn't practical; verified manually instead (see report).
-function ttyInputStream(): NodeJS.ReadableStream {
+function ttyInputStream(): ReadStream | NodeJS.ReadStream {
   try {
     accessSync("/dev/tty", fsConstants.R_OK);
     return createReadStream("/dev/tty");
@@ -39,13 +45,42 @@ function ttyInputStream(): NodeJS.ReadableStream {
   }
 }
 
-async function realConfirm(question: string): Promise<boolean> {
-  const rl = createInterface({ input: ttyInputStream(), output: process.stderr });
+// Exported so a real-pty probe can import and exercise it directly (see
+// cli-t3-report.md, "Fix Round 2") — vitest can't drive a real TTY, so this
+// is the seam manual verification hooks into. Otherwise a pure IO helper;
+// not meant to be called outside prlore's own CLI wiring.
+export async function realConfirm(question: string): Promise<boolean> {
+  const input = ttyInputStream();
+  const rl = createInterface({ input, output: process.stderr });
   try {
-    const answer = await rl.question(`${question} [y/N] `);
-    return /^y(es)?$/i.test(answer.trim());
+    // Race the answer against readline's own "close" event. If the input
+    // stream hits EOF (Ctrl-D, or the tty/stdin is closed) before a line is
+    // typed, readline auto-closes itself — which otherwise leaves
+    // rl.question()'s promise permanently unsettled (Node then reports an
+    // "unsettled top-level await" and exits 13 instead of running the rest
+    // of the CLI). Treat that EOF as an explicit decline, same as any other
+    // non-"y" answer.
+    const answer = await Promise.race([
+      rl.question(`${question} [y/N] `),
+      new Promise<null>((resolve) => rl.once("close", () => resolve(null))),
+    ]);
+    return answer !== null && /^y(es)?$/i.test(answer.trim());
   } finally {
     rl.close();
+    if (input === process.stdin) {
+      // process.stdin is a shared, process-wide stream — destroying it here
+      // would break any later read from stdin in this process. Just stop it
+      // from pinning the event loop open so `prlore mine` (which never calls
+      // process.exit(), only sets process.exitCode) can still exit.
+      input.pause();
+      input.unref();
+    } else {
+      // The /dev/tty path: rl.close() only detaches readline's listeners, it
+      // does NOT close the underlying fd. An open ReadStream on a character
+      // device keeps the event loop alive indefinitely, so `prlore mine`
+      // would hang forever after the user answers. destroy() closes it.
+      input.destroy();
+    }
   }
 }
 
