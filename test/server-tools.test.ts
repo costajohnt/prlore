@@ -5,10 +5,13 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { buildServer } from "../src/server.js";
+import type { GqlTransport } from "../src/github/client.js";
 import type { JobDeps, JobManagerApi, JobResult } from "../src/jobs/manager.js";
 import type { JobStatus } from "../src/jobs/registry.js";
+import type { ModelProvider } from "../src/model/provider.js";
 import type { MineConfig } from "../src/schemas/mine-config.js";
 import { ProvenanceSchema, type ContestedItem, type Provenance, type RuleRecord } from "../src/schemas/provenance.js";
+import type { MineDepsFactory } from "../src/server-tools.js";
 
 // mine() calls resolveToken() with the real process.env by default; set GITHUB_TOKEN
 // so it short-circuits without shelling out to `gh auth token` (no network/process
@@ -108,8 +111,32 @@ function mkDraft(contested: ContestedItem[]): string {
   return lines.join("\n").replace(/\n+$/, "") + "\n";
 }
 
+// StubJobManager (and the literal JobManagerApi some tests build inline) never runs
+// the pipeline, so `deps.transport`/`deps.provider` are recorded but never invoked —
+// these stand-ins exist only so `mine` doesn't fall through to defaultMineDepsFactory's
+// real selectProvider/hasClaudeCli probe of process.env/PATH (which flakes on a
+// machine with neither ANTHROPIC_API_KEY nor the claude CLI). Shaped as real
+// functions, not bare `{}`, because the happy-path test asserts
+// `typeof deps.transport === "function"` and `typeof deps.provider.spentUsd ===
+// "function"`.
+const stubTransport: GqlTransport = async <T>(): Promise<T> => {
+  throw new Error("stub transport should never be called in server-tools tests");
+};
+const stubProvider: ModelProvider = {
+  spentUsd: () => 0,
+  async complete() {
+    throw new Error("stub provider should never be called in server-tools tests");
+  },
+};
+const stubDepsFactory: MineDepsFactory = (_config, { repoPath, stateDir }) => ({
+  transport: stubTransport,
+  provider: stubProvider,
+  stateDir,
+  repoPath,
+});
+
 async function connectedClient(manager?: JobManagerApi) {
-  const server = manager ? buildServer(manager) : buildServer();
+  const server = manager ? buildServer(manager, stubDepsFactory) : buildServer();
   const client = new Client({ name: "test-client", version: "0.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
