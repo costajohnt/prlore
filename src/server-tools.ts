@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { makeTransport, resolveToken, withRetry } from "./github/client.js";
 import { emitDraft, EmitRefusedError, type EmitTarget } from "./emitter/emit.js";
+import { checkMarkers, isMarkerIssue, sanitize } from "./emitter/markers.js";
 import type { JobDeps, JobManagerApi } from "./jobs/manager.js";
 import { AnthropicProvider } from "./model/anthropic.js";
 import { CONTESTED_HEADER } from "./reconciler/render.js";
@@ -31,12 +32,6 @@ export const defaultMineDepsFactory: MineDepsFactory = async (config, { repoPath
   return { transport, provider, stateDir, repoPath };
 };
 
-// Same markers ADR 004 pins in src/emitter/emit.ts — duplicated here (not imported)
-// so the preview-only refusal preflight below stays a read-only peek, scoped to this
-// file, matching the sanitize()-duplication precedent already established between
-// src/reconciler/render.ts and src/emitter/emit.ts.
-const BEGIN = "<!-- prlore:begin -->";
-const END = "<!-- prlore:end -->";
 // Line-anchored, not a bare substring: a contested item's statement is
 // untrusted, PR-derived text and may itself contain the literal header
 // substring. render.ts's sanitize() collapses every run of whitespace
@@ -59,18 +54,6 @@ const END = "<!-- prlore:end -->";
 // a second hardcoded literal, so the two can't drift apart.
 const CONTESTED_HEADER_LINE = new RegExp(`^## ${CONTESTED_HEADER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m");
 
-// Same untrusted-text threat model as render.ts/emit.ts: a contested item's
-// statement is model-derived text landing in markdown we write to disk.
-function sanitize(s: string): string {
-  let out = s.replace(/\s+/g, " ");
-  let prev: string;
-  do {
-    prev = out;
-    out = out.replaceAll("<!--", "").replaceAll("-->", "");
-  } while (out !== prev);
-  return out.trim();
-}
-
 function jsonContent(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value) }] };
 }
@@ -81,9 +64,10 @@ function toolError(err: unknown) {
 }
 
 // Read-only peek at whether a write would hit EmitRefusedError, without touching the
-// file. Mirrors emit.ts's private findMarkers validity check (missing / duplicated /
-// reversed marker pair) but only ever returns a boolean — this is a preview, not a
-// write, so it must never throw for an ordinary "not managed yet" file.
+// file. Shares emit.ts's exact marker-validity check (missing / duplicated / reversed
+// marker pair) via markers.ts's checkMarkers, but only ever returns a boolean — this
+// is a preview, not a write, so it must never throw for an ordinary "not managed yet"
+// file.
 async function refusalPreflight(repoPath: string, target: string): Promise<{ targetExists: boolean; wouldRefuse: boolean }> {
   let content: string;
   try {
@@ -92,13 +76,7 @@ async function refusalPreflight(repoPath: string, target: string): Promise<{ tar
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return { targetExists: false, wouldRefuse: false };
     throw err;
   }
-  const beginIdx = content.indexOf(BEGIN);
-  const endIdx = content.indexOf(END);
-  const missing = beginIdx === -1 || endIdx === -1;
-  const dupBegin = beginIdx !== -1 && content.indexOf(BEGIN, beginIdx + BEGIN.length) !== -1;
-  const dupEnd = endIdx !== -1 && content.indexOf(END, endIdx + END.length) !== -1;
-  const reversed = !missing && beginIdx > endIdx;
-  return { targetExists: true, wouldRefuse: missing || dupBegin || dupEnd || reversed };
+  return { targetExists: true, wouldRefuse: isMarkerIssue(checkMarkers(content)) };
 }
 
 // Strips the contested section (everything from the "Needs your call" header

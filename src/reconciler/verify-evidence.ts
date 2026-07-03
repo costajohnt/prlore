@@ -1,6 +1,7 @@
 import type { CandidateLearning } from "../schemas/candidate-learning.js";
 import type { Association, NormalizedPr } from "../schemas/normalized-pr.js";
 import type { EvidenceRecord } from "../schemas/provenance.js";
+import { HIGH_AUTHORITY } from "./authority.js";
 
 export type VerifiedCandidate = Omit<CandidateLearning, "evidence"> & {
   evidence: EvidenceRecord[];
@@ -24,8 +25,6 @@ const stripBlockquotes = (s: string): string =>
     .split("\n")
     .filter((line) => !/^\s*>/.test(line))
     .join("\n");
-
-const HIGH_AUTHORITY = new Set<Association>(["OWNER", "MEMBER", "COLLABORATOR"]);
 
 function authorityRank(association: Association): number {
   if (HIGH_AUTHORITY.has(association)) return 2;

@@ -1,28 +1,9 @@
+import { sanitize } from "../emitter/markers.js";
 import type { MineConfig } from "../schemas/mine-config.js";
 import type { ContestedItem, RuleRecord } from "../schemas/provenance.js";
 import type { DocPlan } from "./select.js";
 
 const MAX_CITATIONS = 3;
-
-// Every interpolated model-derived field goes through this before hitting the
-// rendered markdown: a statement/rationale/etc. is untrusted text that could carry
-// a newline-smuggled "## Injected heading" or an HTML comment that closes/reopens
-// a structural marker like "<!-- prlore:end -->". Collapsing whitespace runs to a
-// single space keeps everything on one line (no new heading, no list-item break),
-// and stripping comment delimiters keeps a model-authored string from masquerading
-// as a document-structure comment. Marker stripping runs to a FIXPOINT: a single
-// pass is bypassable — "<<!--!-- prlore:end ---->>" reassembles to
-// "<!-- prlore:end -->" once the inner markers are removed — so keep stripping
-// until the string stops changing.
-function sanitize(s: string): string {
-  let out = s.replace(/\s+/g, " ");
-  let prev: string;
-  do {
-    prev = out;
-    out = out.replaceAll("<!--", "").replaceAll("-->", "");
-  } while (out !== prev);
-  return out.trim();
-}
 
 // The literal text of the contested-section header (see the "## Needs your call
 // (contested)" push below). Exported so consumers that need to recognize the

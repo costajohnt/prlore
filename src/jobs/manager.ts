@@ -316,6 +316,14 @@ export class JobManager implements JobManagerApi {
       throw err;
     }
 
+    // DECISION (finished-before-cancel semantics): there is no checkCancel() between
+    // the synthesize() await above and this point. If cancel() sets cancelRequested
+    // while synthesize is in flight, that request is never re-checked once synthesize
+    // resolves — the job still settles into ready-for-preview here, not cancelled.
+    // cancel()'s caller only learns this from status()/result() after the fact (the
+    // checkpointed flag it gets back reflects disk state, not this outcome). This is
+    // consistent with the earlier checkCancel() calls, which only stop the pipeline
+    // BEFORE a stage's expensive work starts, never abort work already in flight.
     job.result = { draft: synthResult.draft, provenance: synthResult.provenance, contested: synthResult.contested };
     this.mergeStatus(job, {
       state: "ready-for-preview",

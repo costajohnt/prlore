@@ -1,5 +1,6 @@
 import type { EvidenceRecord, Verdict } from "../schemas/provenance.js";
 import { MONTH_MS } from "../util/time.js";
+import { HIGH_AUTHORITY } from "./authority.js";
 
 export const SCORING = {
   authority: { high: 1, contributor: 0.5, driveBy: 0.25 },
@@ -17,8 +18,6 @@ export const SCORING = {
 } as const;
 
 export const INCLUDE_THRESHOLD = 0.15;
-
-const HIGH_AUTHORITY = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
 export function authorityOf(evidence: EvidenceRecord[]): number {
   let max: number = SCORING.authority.driveBy;

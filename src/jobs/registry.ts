@@ -12,11 +12,3 @@ export interface JobStatus {
   tokensSpentUsd?: number;
   error?: string;
 }
-
-export class JobRegistry {
-  // Phase 1: no jobs exist yet. Phase 6's JobManager (src/jobs/manager.ts) implements
-  // the real orchestration; wiring it into server.ts is a later task.
-  status(_jobId?: string): JobStatus {
-    return { state: "idle" };
-  }
-}

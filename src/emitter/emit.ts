@@ -1,10 +1,8 @@
 import { readFile, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { BEGIN, checkMarkers, END, isMarkerIssue, sanitize } from "./markers.js";
 import type { Provenance, RuleRecord } from "../schemas/provenance.js";
 import { atomicWriteFile } from "../state/atomic.js";
-
-const BEGIN = "<!-- prlore:begin -->";
-const END = "<!-- prlore:end -->";
 
 // v1 auto-layout threshold (spec §Task 2): a draft over this many lines is
 // treated as the per-area trigger. Accepted as-is for v1 — no smarter heuristic.
@@ -42,20 +40,6 @@ async function readIfExists(path: string): Promise<string | null> {
   }
 }
 
-// Every interpolated model-derived field going into a stub file is untrusted
-// text that could carry a newline-smuggled heading or a marker-lookalike
-// comment (same threat model as reconciler/render.ts's sanitizer, duplicated
-// here rather than imported so this task stays scoped to its own file).
-function sanitize(s: string): string {
-  let out = s.replace(/\s+/g, " ");
-  let prev: string;
-  do {
-    prev = out;
-    out = out.replaceAll("<!--", "").replaceAll("-->", "");
-  } while (out !== prev);
-  return out.trim();
-}
-
 // The block itself, with no trailing newline after END — callers decide what
 // (if anything) follows: a fresh file appends its own final "\n" (nothing else
 // will), a replacement lets the untouched suffix supply whatever originally
@@ -68,23 +52,14 @@ function coreBlock(body: string): string {
 // Validates that `content` contains BOTH markers exactly once each, begin
 // before end, and returns their positions. Throws EmitRefusedError (naming
 // `path`) for anything else: missing either marker, either marker duplicated,
-// or reversed order.
+// or reversed order. Delegates the actual check to markers.ts's checkMarkers,
+// shared with server-tools.ts's read-only refusalPreflight, which needs the
+// identical validity rules but must turn a failure into a boolean instead of
+// throwing.
 function findMarkers(path: string, content: string): { beginIdx: number; endIdx: number } {
-  const beginIdx = content.indexOf(BEGIN);
-  const endIdx = content.indexOf(END);
-  if (beginIdx === -1 || endIdx === -1) {
-    throw new EmitRefusedError(path, "missing prlore:begin/end marker pair");
-  }
-  if (content.indexOf(BEGIN, beginIdx + BEGIN.length) !== -1) {
-    throw new EmitRefusedError(path, "duplicate prlore:begin marker");
-  }
-  if (content.indexOf(END, endIdx + END.length) !== -1) {
-    throw new EmitRefusedError(path, "duplicate prlore:end marker");
-  }
-  if (beginIdx > endIdx) {
-    throw new EmitRefusedError(path, "prlore:end marker appears before prlore:begin");
-  }
-  return { beginIdx, endIdx };
+  const result = checkMarkers(content);
+  if (isMarkerIssue(result)) throw new EmitRefusedError(path, result.reason);
+  return result;
 }
 
 // Computes the FULL next-file-content for one managed-block target without
@@ -109,7 +84,13 @@ async function computeManagedContent(path: string, body: string): Promise<string
 // allowlist on the segment's shape can. `\w.-` covers ordinary path-segment
 // names (letters, digits, underscore, dot, hyphen) while still rejecting the
 // exact "." / ".." tokens and anything carrying a "/" or other escape
-// character.
+// character. Tradeoff, accepted for v1: `\w` is ASCII-only, so a real
+// directory named with non-ASCII characters (e.g. "résumé", "日本語") is
+// never treated as an area — no stub gets written for it and the root's
+// "## Areas" links silently omit it. Fail-closed rather than fail-open: an
+// area that's dropped just doesn't get a stub, whereas loosening the
+// allowlist to admit non-ASCII risks re-opening a path-escape character we
+// haven't audited for.
 function isSafeAreaSegment(segment: string): boolean {
   return segment !== "." && segment !== ".." && /^[\w.-]+$/.test(segment);
 }
