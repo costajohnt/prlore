@@ -2,12 +2,66 @@
 
 Mines a repository's pull-request discussion history, reconciles it against the
 current codebase, and emits a portable AGENTS.md-style conventions file with a
-provenance sidecar. Standalone MCP server.
+provenance sidecar. Runs either as an MCP server or as a standalone terminal
+command.
 
 ## Usage
 
-prlore is an MCP server, not a CLI you run directly. Point an MCP host (Claude
-Code, Claude Desktop, or any other MCP client) at it:
+prlore has two entry points from the same installed binary: `prlore` with no
+arguments runs the MCP server; `prlore mine <owner/repo>` runs the full
+pipeline directly in a terminal, with an interactive preview-and-confirm step
+before anything is written.
+
+Either way, prlore always operates against a **local checkout** of the target
+repo — it runs `git grep`/`git log` against `repoPath` to corroborate what the
+PR discussion says against what the code actually does. Point `repoPath` (or,
+for the CLI, `--repo-path`) at a clone, not a bare `owner/name` reference.
+
+### As a terminal command
+
+```bash
+npx prlore mine octo/repo --intent "onboard an AI coding agent"
+```
+
+This runs the mining pipeline in-process: it starts the job, polls progress to
+stderr every 5 seconds, then once the draft is ready prints it to stdout along
+with any contested rules (listed on stderr — v1's CLI never auto-resolves
+them; use the MCP `write` tool's `resolveContested`, or edit the file by hand,
+to keep one). It then asks `Write AGENTS.md? [y/N]` before touching disk.
+
+```
+usage: prlore mine <owner/repo> [options]
+
+  --intent <text>           what the resulting doc should help with
+  --since <ISO-datetime>     only PRs updated at/after this timestamp
+  --days <n>                 only PRs updated in the last <n> days
+                             (--since and --days are mutually exclusive)
+  --budget <usd>             max USD to spend on model calls (default: 10)
+  --model <id>                model id override
+  --provider <anthropic|claude-cli|auto>
+                             which model backend to use (default: auto)
+  --repo-path <path>         local checkout to mine against (default: cwd)
+  --target <file>            output file (default: AGENTS.md)
+  --yes                       skip the write confirmation prompt
+  --dry-run                   preview only; never writes, even with --yes
+```
+
+Exit codes: `0` on success (including a confirmed-no / `--dry-run` "not
+written" outcome), `1` if the mining job itself failed or the write was
+refused (e.g. a target file with a corrupt managed-block marker pair), `2` for
+a usage or configuration error (bad flags, invalid `MineConfig`, no model
+provider available).
+
+The CLI draws model calls from whichever provider `--provider`/`model.model`
+resolves to (see "Budget and model notes" below) — with `--provider
+claude-cli` or the `auto` fallback, that's your local Claude Code CLI running
+headless against your subscription, so `prlore mine` works with **zero API
+credentials** on a machine that already has `claude` authenticated.
+
+### As an MCP server
+
+Point an MCP host (Claude Code, Claude Desktop, or any other MCP client) at
+it:
 
 ```json
 {
@@ -23,11 +77,6 @@ Code, Claude Desktop, or any other MCP client) at it:
   }
 }
 ```
-
-prlore always operates against a **local checkout** of the target repo — it
-runs `git grep`/`git log` against `repoPath` to corroborate what the PR
-discussion says against what the code actually does. Point `repoPath` at a
-clone, not a bare `owner/name` reference.
 
 ### Environment variables
 
