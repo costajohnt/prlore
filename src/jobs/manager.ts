@@ -17,9 +17,18 @@ import type { MineConfig } from "../schemas/mine-config.js";
 import type { ContestedItem, Provenance } from "../schemas/provenance.js";
 import { loadCheckpoint, saveCheckpoint } from "../state/checkpoint.js";
 import { readCorpus } from "../state/corpus.js";
+import { cappedProvider } from "./capped-provider.js";
 import type { JobStatus } from "./registry.js";
 
 export type { JobStatus };
+
+// Fraction of maxBudgetUsd reserved for synthesis (reconcile + plan — the single most
+// valuable LLM calls, which rethrow BudgetExceededError as a hard failure). Extraction
+// is capped at the remaining (1 - reserve) so a budget-partial extraction leaves
+// synthesis enough headroom to complete — otherwise "budget-partial -> ready-for-preview"
+// would be unreachable against the real provider's shared monotonic spend counter.
+// Fixed for v1; not config-exposed.
+const SYNTHESIS_RESERVE = 0.2;
 
 export interface JobDeps {
   transport: GqlTransport;
@@ -135,7 +144,15 @@ export class JobManager {
     if (!this.job || (jobId !== undefined && jobId !== this.job.jobId)) {
       return { state: "idle" };
     }
-    return { ...this.job.status, tokensSpentUsd: this.job.deps.provider.spentUsd() };
+    const s = this.job.status;
+    // Deep-copy the mutable containers: callers must not be able to mutate live state
+    // (or observe its mutation) through a returned snapshot.
+    return {
+      ...s,
+      ...(s.counters ? { counters: { ...s.counters } } : {}),
+      ...(s.warnings ? { warnings: [...s.warnings] } : {}),
+      tokensSpentUsd: this.job.deps.provider.spentUsd(),
+    };
   }
 
   async cancel(jobId: string): Promise<{ checkpointed: boolean }> {
@@ -205,7 +222,13 @@ export class JobManager {
     // Step 2: fetchCorpus with the extractor attached via onPr — fetch and extraction
     // overlap. Extractor.enqueue() throws once drain() has run, so this instance must
     // never be drained before the post-fetch sweep below has finished enqueueing.
-    const extractor = new Extractor({ provider: deps.provider, stateDir: deps.stateDir, model: config.model.model });
+    // Extraction runs against a REDUCED cap (see SYNTHESIS_RESERVE): analyze (above)
+    // and synthesize (below) get the raw provider with the full budget.
+    const extractionProvider = cappedProvider(
+      deps.provider,
+      config.model.maxBudgetUsd * (1 - SYNTHESIS_RESERVE),
+    );
+    const extractor = new Extractor({ provider: extractionProvider, stateDir: deps.stateDir, model: config.model.model });
     const throttle = new Throttle({ now });
     const fetchSummary = await fetchCorpus(config, {
       transport: deps.transport,

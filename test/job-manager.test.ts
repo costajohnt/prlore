@@ -93,44 +93,56 @@ const emptyLearnings = { learnings: [] };
 const emptyReconcile = { proposals: [] };
 const emptyPlan = { title: "Conventions", overview: "auto-generated", sections: [], perArea: false };
 
+function routePrompt<T>(prompt: string, schema: CompleteOptions<T>["schema"], calls?: string[]): T {
+  if (prompt.startsWith(ANALYZE_MARKER)) {
+    calls?.push("analyze");
+    return schema.parse(analyzeResponse);
+  }
+  if (prompt.startsWith(EXTRACT_MARKER)) {
+    calls?.push("extract");
+    return schema.parse(emptyLearnings);
+  }
+  if (prompt.startsWith(RECONCILE_MARKER)) {
+    calls?.push("reconcile");
+    return schema.parse(emptyReconcile);
+  }
+  if (prompt.startsWith(PLAN_MARKER)) {
+    calls?.push("plan");
+    return schema.parse(emptyPlan);
+  }
+  throw new Error(`unrouted provider prompt: ${prompt.slice(0, 40)}`);
+}
+
 /** Records the ordered kind of every provider.complete() call so tests can pin the
- * analyze-before-extraction ordering contract; each handler is independently
- * overridable per test. */
-function recordingProvider(overrides: {
-  onExtract?: (prompt: string) => unknown;
-  onReconcile?: () => unknown;
-  onPlan?: () => unknown;
-} = {}) {
+ * analyze-before-extraction ordering contract. Never spends budget. */
+function recordingProvider() {
   const calls: string[] = [];
   const provider: ModelProvider = {
     spentUsd: () => 0,
     async complete<T>({ prompt, schema }: CompleteOptions<T>): Promise<T> {
-      if (prompt.startsWith(ANALYZE_MARKER)) {
-        calls.push("analyze");
-        return schema.parse(analyzeResponse);
-      }
-      if (prompt.startsWith(EXTRACT_MARKER)) {
-        calls.push("extract");
-        const res = overrides.onExtract ? overrides.onExtract(prompt) : emptyLearnings;
-        if (res instanceof Error) throw res;
-        return schema.parse(res);
-      }
-      if (prompt.startsWith(RECONCILE_MARKER)) {
-        calls.push("reconcile");
-        const res = overrides.onReconcile ? overrides.onReconcile() : emptyReconcile;
-        if (res instanceof Error) throw res;
-        return schema.parse(res);
-      }
-      if (prompt.startsWith(PLAN_MARKER)) {
-        calls.push("plan");
-        const res = overrides.onPlan ? overrides.onPlan() : emptyPlan;
-        if (res instanceof Error) throw res;
-        return schema.parse(res);
-      }
-      throw new Error(`unrouted provider prompt: ${prompt.slice(0, 40)}`);
+      return routePrompt(prompt, schema, calls);
     },
   };
   return { provider, calls };
+}
+
+/** Faithful to AnthropicProvider's budget semantics: ONE monotonic spent counter shared
+ * across every call kind (analyze/extract/reconcile/plan alike), a pre-call gate that
+ * throws BudgetExceededError once spent >= cap (anthropic.ts line "if (this.spent >=
+ * this.opts.maxBudgetUsd) throw"), and a fixed cost booked per completed call. Gate and
+ * increment run with no await between them, so concurrent extraction workers can't
+ * interleave past the cap — same atomicity as the real provider's single-threaded
+ * check-then-track. */
+function sharedBudgetProvider(capUsd: number, costPerCall = 1): ModelProvider {
+  let spent = 0;
+  return {
+    spentUsd: () => spent,
+    async complete<T>({ prompt, schema }: CompleteOptions<T>): Promise<T> {
+      if (spent >= capUsd) throw new BudgetExceededError(spent, capUsd);
+      spent += costPerCall;
+      return routePrompt(prompt, schema);
+    },
+  };
 }
 
 async function freshDeps(repoPath: string, transport: GqlTransport): Promise<Omit<JobDeps, "provider">> {
@@ -166,6 +178,14 @@ test("full run reaches ready-for-preview with a non-null result; analyze's provi
   const extractIdxs = calls.map((c, i) => (c === "extract" ? i : -1)).filter((i) => i >= 0);
   expect(extractIdxs.length).toBeGreaterThan(0);
   for (const i of extractIdxs) expect(i).toBeGreaterThan(analyzeIdx);
+
+  // status() hands out copies: mutating a returned snapshot must not leak into the
+  // manager's live state.
+  status.counters!["kept"] = 999;
+  status.warnings!.push("mutated");
+  const reread = manager.status(jobId);
+  expect(reread.counters?.kept).not.toBe(999);
+  expect(reread.warnings).toEqual([]);
 });
 
 // ---- Test 2: double-start rejection ------------------------------------------------
@@ -231,44 +251,53 @@ test("cancel requested during analyze takes effect at the next stage boundary: c
   expect(manager.result(jobId)).toBeNull();
 });
 
-// ---- Test 4: synthesize budget failure ----------------------------------------------
+// ---- Test 4: extraction budget-partial under a SHARED budget => warning + ready ----
+// The provider mirrors AnthropicProvider: one monotonic counter across all call kinds.
+// Cap 10, cost 1/call, 10 PRs: analyze spends 1; extraction runs against the RESERVED
+// cap of 10 * 0.8 = 8, so exactly 7 PR extractions succeed (spent 1 -> 8) and 3 get
+// budget-skipped; synthesis then still has 8 < 10 headroom for its reconcile (-> 9)
+// and plan (-> 10) calls. Without the reservation, extraction would burn to 10 and the
+// reconcile call's pre-call gate would throw -> failed. This test pins the reservation.
 
-test("a BudgetExceededError from synthesize's reconcile call fails the job with a budget message", async () => {
+test("shared monotonic budget: extraction trips its reduced cap, synthesis completes within the reserve -> ready-for-preview with the budget-partial warning", async () => {
   const repo = await buildFixtureRepo();
-  const transport = fakeTransport(onePagePages([1]));
-  const { provider } = recordingProvider({
-    onReconcile: () => new BudgetExceededError(5, 5),
-  });
+  const prNumbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+  const transport = fakeTransport(onePagePages(prNumbers));
+  const provider = sharedBudgetProvider(10);
   const manager = new JobManager();
   const base = await freshDeps(repo, transport);
 
-  const { jobId } = manager.start(mkConfig(), { ...base, provider });
+  const { jobId } = manager.start(mkConfig({ model: { maxBudgetUsd: 10 } }), { ...base, provider });
+  await manager.settled();
+
+  const status = manager.status(jobId);
+  expect(status.state).toBe("ready-for-preview");
+  expect(status.warnings?.some((w) => w.startsWith("extraction budget-partial"))).toBe(true);
+  expect(status.counters?.skippedBudget).toBe(3);
+  expect(status.counters?.extracted).toBe(7);
+  expect(status.tokensSpentUsd).toBe(10); // analyze 1 + extract 7 + reconcile 1 + plan 1
+  expect(manager.result(jobId)).not.toBeNull();
+});
+
+// ---- Test 5: shared budget so small synthesis exhausts the FULL cap too => failed ---
+// Cap 2, cost 1/call, 3 PRs: analyze spends 1; extraction (reduced cap 1.6) fits one PR
+// (spent -> 2) then trips; synthesize's reconcile call hits the full cap's pre-call
+// gate (2 >= 2) -> BudgetExceededError -> failed is now legitimate and stays.
+
+test("shared monotonic budget: synthesis exhausting the full cap fails the job with a budget message", async () => {
+  const repo = await buildFixtureRepo();
+  const transport = fakeTransport(onePagePages([1, 2, 3]));
+  const provider = sharedBudgetProvider(2);
+  const manager = new JobManager();
+  const base = await freshDeps(repo, transport);
+
+  const { jobId } = manager.start(mkConfig({ model: { maxBudgetUsd: 2 } }), { ...base, provider });
   await manager.settled();
 
   const status = manager.status(jobId);
   expect(status.state).toBe("failed");
   expect(status.error).toMatch(/budget/i);
   expect(manager.result(jobId)).toBeNull();
-});
-
-// ---- Test 5: extraction budget-partial => warning, still ready-for-preview ---------
-
-test("extraction running out of budget mid-run warns but still reaches ready-for-preview", async () => {
-  const repo = await buildFixtureRepo();
-  const transport = fakeTransport(onePagePages([1, 2]));
-  const { provider } = recordingProvider({
-    onExtract: () => new BudgetExceededError(1, 1),
-  });
-  const manager = new JobManager();
-  const base = await freshDeps(repo, transport);
-
-  const { jobId } = manager.start(mkConfig(), { ...base, provider });
-  await manager.settled();
-
-  const status = manager.status(jobId);
-  expect(status.state).toBe("ready-for-preview");
-  expect(status.warnings?.some((w) => w.startsWith("extraction budget-partial"))).toBe(true);
-  expect(manager.result(jobId)).not.toBeNull();
 });
 
 // ---- Test 6: prsSeen === 0 warning ---------------------------------------------------
