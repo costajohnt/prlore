@@ -22,6 +22,10 @@ export type ReconciledRule = Omit<Cluster, "id"> & {
   probeResult?: { token: string; head: number; recent: number; prior: number };
   exemplars: string[];
   syntheticScore?: number;
+  // v0.3 Task 3: set by dedupe.ts when this rule is the KEPT member of a cross-bucket
+  // merge — the absorbed rules' original ids, so provenance can record what was
+  // folded in. Absent on every rule that wasn't a merge target.
+  mergedFrom?: (number | string)[];
 };
 
 const ReconciliationDraftSchema = z.object({

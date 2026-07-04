@@ -15,6 +15,7 @@ import {
 import { atomicWriteFile } from "../state/atomic.js";
 import { loadCheckpoint, saveCheckpoint } from "../state/checkpoint.js";
 import { clusterCandidates } from "./cluster.js";
+import { dedupeAcrossBuckets } from "./dedupe.js";
 import { mergeCodeOnlyPatterns, reconcileClusters, type ReconciledRule } from "./reconcile.js";
 import { renderDraft } from "./render.js";
 import { authorityOf, failsRecurrenceFloor, INCLUDE_THRESHOLD, recurrenceOf, scoreRule } from "./score.js";
@@ -50,6 +51,7 @@ function toRuleRecord(rule: ReconciledRule, nowMs: number): RuleRecord {
     verdict: rule.verdict,
     ...(rule.rationale ? { rationale: rule.rationale } : {}),
     ...(rule.generality ? { generality: rule.generality } : {}),
+    ...(rule.mergedFrom && rule.mergedFrom.length > 0 ? { mergedFrom: rule.mergedFrom.map(String) } : {}),
     evidence: rule.evidence,
     exemplars: rule.exemplars,
     lastCorroborated,
@@ -133,14 +135,23 @@ export async function synthesize(
   });
   const merged = mergeCodeOnlyPatterns(reconciled, patterns);
 
+  // Cross-bucket dedup pass (v0.3 Task 3): runs here — after reconcile + the
+  // code-only merge, before RuleRecord/scoring — so the union of a merged pair's
+  // evidence feeds recurrence/scoring for the surviving (kept) record, rather than
+  // scoring each duplicate separately and then trying to reconcile two already-scored
+  // rules. See v03-t3-report.md for why "highest-score member" (the plan's literal
+  // adjudication rule) can't apply at this pre-scoring position.
+  const { rules: deduped, warning: dedupeWarning } = await dedupeAcrossBuckets(merged, provider);
+  if (dedupeWarning) warnings.push(dedupeWarning);
+
   // Three-way disjoint split: contested first (its corroboration weight is 0, so it
   // would otherwise always land in `dropped`), then the score threshold.
   const contested: ContestedItem[] = [];
   const rules: RuleRecord[] = [];
   const dropped: RuleRecord[] = [];
-  const contestedById = new Map(merged.filter((r) => r.verdict === "contested").map((r) => [r.id, r]));
+  const contestedById = new Map(deduped.filter((r) => r.verdict === "contested").map((r) => [r.id, r]));
   const consumed = new Set<ReconciledRule["id"]>();
-  for (const rule of merged) {
+  for (const rule of deduped) {
     if (rule.verdict === "contested") {
       if (consumed.has(rule.id)) continue; // already emitted as the other half of a pair
       const partner = rule.contestedWith !== undefined ? contestedById.get(rule.contestedWith) : undefined;

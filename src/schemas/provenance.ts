@@ -51,6 +51,11 @@ export const RuleRecordSchema = z.object({
   // "repo-wide" (no penalty), so this being unset never implies a penalty was
   // silently dropped.
   generality: GeneralitySchema.optional(),
+  // Additive, optional (v0.3 Task 3): set only on the KEPT member of a cross-bucket
+  // dedup merge (see reconciler/dedupe.ts) — the original ids of the rules folded
+  // into this one. Absent on every record that wasn't a merge target, including all
+  // 0.2.x sidecars.
+  mergedFrom: z.array(z.string()).optional(),
 });
 export type RuleRecord = z.infer<typeof RuleRecordSchema>;
 

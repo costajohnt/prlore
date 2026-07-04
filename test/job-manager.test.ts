@@ -86,11 +86,17 @@ function mkConfig(overrides: Record<string, unknown> = {}): MineConfig {
 const ANALYZE_MARKER = "## User intent";
 const EXTRACT_MARKER = "## PR #";
 const RECONCILE_MARKER = "meta:";
+// v0.3 Task 3: the cross-bucket dedup pass's one provider call, threaded between
+// reconcile and plan (see synthesize.ts). Checked before PLAN_MARKER below since
+// dedupe's prompt never starts with "intent:", but for symmetry with the other
+// markers this is its own constant.
+const DEDUPE_MARKER = "dedupe:";
 const PLAN_MARKER = "intent:";
 
 const analyzeResponse = { areaDescriptions: [], patterns: [], migrationCandidates: [] };
 const emptyLearnings = { learnings: [] };
 const emptyReconcile = { proposals: [] };
+const emptyDedupe = { mergeSets: [] };
 const emptyPlan = { title: "Conventions", overview: "auto-generated", sections: [], perArea: false };
 
 function routePrompt<T>(prompt: string, schema: CompleteOptions<T>["schema"], calls?: string[]): T {
@@ -105,6 +111,10 @@ function routePrompt<T>(prompt: string, schema: CompleteOptions<T>["schema"], ca
   if (prompt.startsWith(RECONCILE_MARKER)) {
     calls?.push("reconcile");
     return schema.parse(emptyReconcile);
+  }
+  if (prompt.startsWith(DEDUPE_MARKER)) {
+    calls?.push("dedupe");
+    return schema.parse(emptyDedupe);
   }
   if (prompt.startsWith(PLAN_MARKER)) {
     calls?.push("plan");
@@ -253,29 +263,30 @@ test("cancel requested during analyze takes effect at the next stage boundary: c
 
 // ---- Test 4: extraction budget-partial under a SHARED budget => warning + ready ----
 // The provider mirrors AnthropicProvider: one monotonic counter across all call kinds.
-// Cap 10, cost 1/call, 10 PRs: analyze spends 1; extraction runs against the RESERVED
-// cap of 10 * 0.8 = 8, so exactly 7 PR extractions succeed (spent 1 -> 8) and 3 get
-// budget-skipped; synthesis then still has 8 < 10 headroom for its reconcile (-> 9)
-// and plan (-> 10) calls. Without the reservation, extraction would burn to 10 and the
-// reconcile call's pre-call gate would throw -> failed. This test pins the reservation.
+// Cap 15, cost 1/call, 14 PRs: analyze spends 1; extraction runs against the RESERVED
+// cap of 15 * 0.8 = 12, so exactly 11 PR extractions succeed (spent 1 -> 12) and 3 get
+// budget-skipped; synthesis then still has 12 < 15 headroom for its reconcile (-> 13),
+// dedup (-> 14, v0.3 Task 3), and plan (-> 15) calls. Without the reservation,
+// extraction would burn to the full cap and synthesis's first call's pre-call gate
+// would throw -> failed. This test pins the reservation.
 
 test("shared monotonic budget: extraction trips its reduced cap, synthesis completes within the reserve -> ready-for-preview with the budget-partial warning", async () => {
   const repo = await buildFixtureRepo();
-  const prNumbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+  const prNumbers = Array.from({ length: 14 }, (_, i) => i + 1);
   const transport = fakeTransport(onePagePages(prNumbers));
-  const provider = sharedBudgetProvider(10);
+  const provider = sharedBudgetProvider(15);
   const manager = new JobManager();
   const base = await freshDeps(repo, transport);
 
-  const { jobId } = manager.start(mkConfig({ model: { maxBudgetUsd: 10 } }), { ...base, provider });
+  const { jobId } = manager.start(mkConfig({ model: { maxBudgetUsd: 15 } }), { ...base, provider });
   await manager.settled();
 
   const status = manager.status(jobId);
   expect(status.state).toBe("ready-for-preview");
   expect(status.warnings?.some((w) => w.startsWith("extraction budget-partial"))).toBe(true);
   expect(status.counters?.skippedBudget).toBe(3);
-  expect(status.counters?.extracted).toBe(7);
-  expect(status.tokensSpentUsd).toBe(10); // analyze 1 + extract 7 + reconcile 1 + plan 1
+  expect(status.counters?.extracted).toBe(11);
+  expect(status.tokensSpentUsd).toBe(15); // analyze 1 + extract 11 + reconcile 1 + dedup 1 + plan 1
   expect(manager.result(jobId)).not.toBeNull();
 });
 

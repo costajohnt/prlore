@@ -130,6 +130,7 @@ function scriptedProvider(planFor: (prompt: string) => DocPlan = () => defaultPl
       calls++;
       if (prompt.startsWith("intent:")) return planFor(prompt) as T; // plan call
       if (prompt.startsWith("meta:")) return reconcileDraft as T; // reconcile call
+      if (prompt.startsWith("dedupe:")) return { mergeSets: [] } as T; // dedup call: no-op by default
       // cluster call: one group per "[i] statement (polarity)" candidate line
       const lines = prompt.split("\n").filter((l) => /^\[\d+\]/.test(l));
       const groups = lines.map((line, i) => ({
@@ -204,8 +205,9 @@ test("end-to-end: stale oldApi rule is probe-demoted into provenance.dropped, dr
   const cp = await loadCheckpoint(stateDir);
   expect(cp!.stage).toBe("ready-for-preview");
 
-  // provider economy: 3 non-empty buckets + reconcile + plan
-  expect(callCount()).toBe(5);
+  // provider economy: 3 non-empty buckets + reconcile + dedup + plan (v0.3 Task 3:
+  // buckets + 3)
+  expect(callCount()).toBe(6);
 });
 
 // ---- Test 2: MUST-PASS §11 different intents -> different docs -------------
@@ -378,6 +380,7 @@ test("Fix 4: a cluster-bucket fallback produces a warnings entry", async () => {
       calls++;
       if (prompt.startsWith("intent:")) return defaultPlan as T; // plan call
       if (prompt.startsWith("meta:")) return reconcileDraft as T; // reconcile call
+      if (prompt.startsWith("dedupe:")) return { mergeSets: [] } as T; // dedup call: no-op
       throw new Error("model unavailable for clustering"); // every cluster bucket falls back
     },
   };
@@ -437,6 +440,9 @@ test("Fix 6: a 3b conflict-pair contested outcome merges both sides into a singl
           { clusterId: 1, proposedVerdict: "corroborated" },
         ] } as T;
       }
+      // dedup call: both surviving rules here are the two contested-pair halves, so
+      // there is nothing eligible to propose (a contested id would be rejected anyway).
+      if (prompt.startsWith("dedupe:")) return { mergeSets: [] } as T;
       clusterCallSeen = true;
       return {
         groups: [
@@ -548,6 +554,8 @@ test("Task 1: recurrence floor drops a single-PR CONTRIBUTOR rule but keeps its 
           ],
         } as T;
       }
+      // Dedup call: these three statements share no norm, so no-op is the honest response.
+      if (prompt.startsWith("dedupe:")) return { mergeSets: [] } as T;
       // Cluster and plan calls both fall back to their deterministic paths.
       throw new Error("no-op: clustering and planning both fall back deterministically");
     },
@@ -658,6 +666,11 @@ test("Task 2: a site-specific rule's 0.5x penalty drops it below INCLUDE_THRESHO
       if (prompt.startsWith("meta:")) {
         return { proposals: [] } as T; // no proposals -> every cluster defaults to unobservable
       }
+      // Dedup call: repo-wide and site-specific are deliberately DIFFERENT norms here
+      // (retry helper vs. a specific internal helper), so no-op is the honest response.
+      // Must be checked before the cluster-call `includes` branches below, since this
+      // prompt's rule list also contains the repo-wide statement text.
+      if (prompt.startsWith("dedupe:")) return { mergeSets: [] } as T;
       if (prompt.includes(GEN_REPO_WIDE_STATEMENT)) {
         return { groups: [{ memberIndexes: [0], canonicalStatement: GEN_REPO_WIDE_STATEMENT, generality: "repo-wide" }] } as T;
       }
@@ -684,4 +697,134 @@ test("Task 2: a site-specific rule's 0.5x penalty drops it below INCLUDE_THRESHO
   expect(droppedRule!.droppedReason).toBeUndefined(); // plain score-threshold drop, not the recurrence floor
   expect(provenance.rules.some((r) => r.statement === GEN_SITE_SPECIFIC_STATEMENT)).toBe(false);
   expect(draft).not.toContain(GEN_SITE_SPECIFIC_STATEMENT);
+});
+
+// ---- v0.3 Task 3: cross-bucket dedup pass -----------------------------------
+//
+// Same underlying norm ("gate TTY-only output"), filed under two different
+// categories (style, process) so clusterCandidates' per-bucket buckets never see
+// them together — this is exactly the ink-run gap the pass exists to close. Both
+// candidates get OWNER evidence (HIGH_AUTHORITY) so the recurrence floor never
+// enters into it; only the dedup pass's own merge explains the outcome.
+
+const TTY_STYLE_STATEMENT = "Gate TTY-only output behind an isatty check";
+const TTY_PROCESS_STATEMENT = "Don't print ANSI codes unless attached to a terminal";
+
+test("Task 3: same norm filed under two different categories merges into one rule; provenance carries mergedFrom; call count = buckets + 3", async () => {
+  const repo = await buildFixtureRepo();
+
+  const quoteStyle = "please gate tty-only output behind an isatty check before printing";
+  const quoteProcess = "do not print ansi codes unless we are attached to a terminal";
+
+  const ttyCandidates: CandidateLearning[] = [
+    {
+      statement: TTY_STYLE_STATEMENT,
+      category: "style",
+      polarity: "prescriptive",
+      scope: [],
+      evidence: [{ pr: 20, author: "owner1", association: "OWNER", quote: quoteStyle, createdAt: "2026-06-20T00:00:00Z" }],
+    },
+    {
+      statement: TTY_PROCESS_STATEMENT,
+      category: "process",
+      polarity: "prescriptive",
+      scope: [],
+      evidence: [{ pr: 21, author: "owner1", association: "OWNER", quote: quoteProcess, createdAt: "2026-06-20T00:00:00Z" }],
+    },
+  ];
+
+  const mkTtyPr = (number: number, quote: string): NormalizedPr => ({
+    number, title: `PR ${number}`, body: `Reviewing this. ${quote}. Thanks!`,
+    author: "owner1", authorAssociation: "OWNER", state: "MERGED", mergedAt: null,
+    updatedAt: "2026-06-20T00:00:00Z", labels: [], files: [], threads: [], reviews: [], comments: [],
+  });
+  const ttyPrs: NormalizedPr[] = [mkTtyPr(20, quoteStyle), mkTtyPr(21, quoteProcess)];
+
+  const ttyPatterns: PatternsModel = { areas: [], patterns: [], migrations: [], meta: { languages: [], frameworks: [], tooling: [] } };
+
+  let calls = 0;
+  let dedupePrompt = "";
+  const provider: ModelProvider = {
+    spentUsd: () => 0,
+    async complete<T>({ prompt }: CompleteOptions<T>): Promise<T> {
+      calls++;
+      if (prompt.startsWith("intent:")) {
+        return { title: "T", overview: "", perArea: false, sections: [{ heading: "All", ruleIds: ["0"] }] } as T;
+      }
+      if (prompt.startsWith("meta:")) {
+        // Both clusters (style=0, process=1, per the fixed CATEGORIES enumeration
+        // order with only style/process non-empty) propose "corroborated", no probe.
+        return { proposals: [
+          { clusterId: 0, proposedVerdict: "corroborated" },
+          { clusterId: 1, proposedVerdict: "corroborated" },
+        ] } as T;
+      }
+      if (prompt.startsWith("dedupe:")) {
+        // Both rule ids appear as one-liners in the prompt; propose merging them.
+        dedupePrompt = prompt;
+        return { mergeSets: [{ ids: [0, 1] }] } as T;
+      }
+      // cluster call: one singleton group per bucket (one candidate per bucket here)
+      return { groups: [{ memberIndexes: [0], canonicalStatement: prompt.replace(/^\[0\]\s*/, "").replace(/ \(prescriptive\)$/, "") }] } as T;
+    },
+  };
+
+  const { draft, provenance } = await synthesize(baseConfig, ttyPatterns, ttyCandidates, ttyPrs, {
+    provider,
+    repoPath: repo,
+    now,
+  });
+
+  expect(dedupePrompt).toContain(`[0] ${TTY_STYLE_STATEMENT}`);
+  expect(dedupePrompt).toContain(`[1] ${TTY_PROCESS_STATEMENT}`);
+
+  // Exactly one surviving rule; the absorbed id is gone entirely (not even in dropped).
+  expect(provenance.rules).toHaveLength(1);
+  expect(provenance.dropped).toHaveLength(0);
+  const kept = provenance.rules[0]!;
+  expect(kept.id).toBe("0"); // tie-break (equal evidence/PR counts) -> lowest id
+  expect(kept.statement).toBe(TTY_STYLE_STATEMENT); // kept member's own statement, not a synthesized one
+  expect(kept.mergedFrom).toEqual(["1"]);
+  expect(kept.evidence).toHaveLength(2); // union of both rules' evidence
+  expect(new Set(kept.evidence.map((e) => e.pr))).toEqual(new Set([20, 21]));
+
+  // The absorbed rule's statement never renders on its own; the kept statement does.
+  expect(draft).toContain(TTY_STYLE_STATEMENT);
+  expect(draft).not.toContain(TTY_PROCESS_STATEMENT);
+
+  // provider economy: 2 non-empty buckets (style, process) + reconcile + dedup + plan
+  expect(calls).toBe(5);
+});
+
+test("Task 3: a proposal naming a contested id is rejected (both sides survive untouched)", async () => {
+  const repo = await buildFixtureRepo();
+  const { provider } = scriptedProvider();
+  const candidates = mkCandidates("2026-06-15T00:00:00Z"); // recent OWNER evidence -> 3a contested fires for id 0
+
+  const recentPrs: NormalizedPr[] = [
+    mkPr(1, `Reviewing the widget code. ${QUOTE_C1}. Thanks!`, "2026-06-15T00:00:00Z"),
+    ...prs.slice(1),
+  ];
+
+  // A malicious/erroneous dedup proposal naming the contested id (0) alongside a
+  // legitimate non-contested one (1) — the whole set must be rejected, not partially
+  // applied, and id 0 must still surface as contested rather than silently vanishing.
+  const provWithBadProposal: ModelProvider = {
+    spentUsd: () => 0,
+    async complete<T>(opts: CompleteOptions<T>): Promise<T> {
+      if (opts.prompt.startsWith("dedupe:")) return { mergeSets: [{ ids: [0, 1] }] } as T;
+      return provider.complete(opts);
+    },
+  };
+
+  const { provenance, contested } = await synthesize(baseConfig, patterns, candidates, recentPrs, {
+    provider: provWithBadProposal,
+    repoPath: repo,
+    now,
+  });
+
+  expect(contested).toHaveLength(1);
+  expect(contested[0]!.id).toBe("0");
+  expect(provenance.rules.some((r) => r.id === "1")).toBe(true);
+  expect(provenance.rules.find((r) => r.id === "1")!.mergedFrom).toBeUndefined();
 });

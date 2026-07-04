@@ -259,6 +259,11 @@ function scriptedProvider(): ModelProvider {
       if (prompt.startsWith("intent:")) {
         return schema.parse(routePlan(prompt));
       }
+      if (prompt.startsWith("dedupe:")) {
+        // v0.3 Task 3: no-op (no merges) -- this golden test predates the pass and its
+        // expected output must stay byte-identical.
+        return schema.parse({ mergeSets: [] });
+      }
       // cluster call: one singleton group per "[i] statement (polarity)" candidate
       // line -- same convention test/synthesize.test.ts's scriptedProvider uses.
       // generality: "repo-wide" for every group -- this golden test predates v0.3
