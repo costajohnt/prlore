@@ -5,6 +5,10 @@ export const MineConfigSchema = z.object({
   baseUrl: z.string().url().default("https://api.github.com"),
   intent: z.string().min(1),
   focusAreas: z.array(z.string()).default([]),
+  // Filters kept PRs down to these author logins, case-insensitive. Empty (the
+  // default) applies no author filter — every PR that survives the existing
+  // keep/drop rules (bot/LGTM stripping) is kept, matching pre-existing behavior.
+  authors: z.array(z.string().min(1)).default([]),
   timeRange: z
     .object({
       since: z.string().datetime({ offset: true }).optional(),

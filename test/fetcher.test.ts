@@ -21,6 +21,7 @@ const page = (hasNextPage = false) => ({ hasNextPage });
 interface MkPrOpts {
   lgtm?: boolean;
   overflow?: boolean;
+  author?: RawActor | null;
 }
 
 function mkPr(number: number, updatedAt: string, opts: MkPrOpts = {}): RawPrNode {
@@ -32,7 +33,7 @@ function mkPr(number: number, updatedAt: string, opts: MkPrOpts = {}): RawPrNode
     updatedAt,
     mergedAt: updatedAt,
     state: "MERGED",
-    author: human,
+    author: opts.author !== undefined ? opts.author : human,
     authorAssociation: "CONTRIBUTOR",
     labels: { nodes: [] },
     files: { nodes: [{ path: "src/x.ts" }], pageInfo: page() },
@@ -139,6 +140,87 @@ test("filters feed counters", async () => {
   const { prs } = await readCorpus(join(stateDir, "corpus.jsonl"));
   expect(prs).toHaveLength(1);
   expect(prs[0]!.number).toBe(1);
+});
+
+test("authors filter: case-insensitively keeps matching authors and drops the rest, counting drops", async () => {
+  const config = mkConfig({ authors: ["CostaJohnT"] });
+  const page1 = {
+    rateLimit: rateLimit(),
+    repository: {
+      pullRequests: {
+        pageInfo: { hasNextPage: false, endCursor: "CURSOR_1" },
+        nodes: [
+          mkPr(1, "2026-06-01T00:00:00Z", { author: { login: "costajohnt", __typename: "User" } }),
+          mkPr(2, "2026-06-02T00:00:00Z", { author: { login: "someone-else", __typename: "User" } }),
+        ],
+      },
+    },
+  };
+  const { transport } = fakeTransport([page1]);
+  const { stateDir } = await freshDeps();
+
+  const summary = await fetchCorpus(config, { transport, throttle: quietThrottle(), stateDir });
+
+  expect(summary.kept).toBe(1);
+  expect(summary.dropped).toBe(1);
+
+  const { prs } = await readCorpus(join(stateDir, "corpus.jsonl"));
+  expect(prs).toHaveLength(1);
+  expect(prs[0]!.number).toBe(1);
+  expect(prs[0]!.author).toBe("costajohnt");
+
+  const finalCp = await loadCheckpoint(stateDir);
+  expect(finalCp?.counters.dropped).toBe(1);
+});
+
+test("empty authors filter keeps everything, as before", async () => {
+  const config = mkConfig({ authors: [] });
+  const page1 = {
+    rateLimit: rateLimit(),
+    repository: {
+      pullRequests: {
+        pageInfo: { hasNextPage: false, endCursor: "CURSOR_1" },
+        nodes: [
+          mkPr(1, "2026-06-01T00:00:00Z", { author: { login: "costajohnt", __typename: "User" } }),
+          mkPr(2, "2026-06-02T00:00:00Z", { author: { login: "someone-else", __typename: "User" } }),
+        ],
+      },
+    },
+  };
+  const { transport } = fakeTransport([page1]);
+  const { stateDir } = await freshDeps();
+
+  const summary = await fetchCorpus(config, { transport, throttle: quietThrottle(), stateDir });
+
+  expect(summary.kept).toBe(2);
+  expect(summary.dropped).toBe(0);
+});
+
+test("ghost/null author is dropped under an authors filter", async () => {
+  const config = mkConfig({ authors: ["alice"] });
+  const page1 = {
+    rateLimit: rateLimit(),
+    repository: {
+      pullRequests: {
+        pageInfo: { hasNextPage: false, endCursor: "CURSOR_1" },
+        nodes: [
+          mkPr(1, "2026-06-01T00:00:00Z", { author: null }),
+          mkPr(2, "2026-06-02T00:00:00Z", { author: human }),
+        ],
+      },
+    },
+  };
+  const { transport } = fakeTransport([page1]);
+  const { stateDir } = await freshDeps();
+
+  const summary = await fetchCorpus(config, { transport, throttle: quietThrottle(), stateDir });
+
+  expect(summary.kept).toBe(1);
+  expect(summary.dropped).toBe(1);
+
+  const { prs } = await readCorpus(join(stateDir, "corpus.jsonl"));
+  expect(prs).toHaveLength(1);
+  expect(prs[0]!.number).toBe(2);
 });
 
 test("overflow queue round-trip", async () => {

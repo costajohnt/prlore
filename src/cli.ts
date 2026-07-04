@@ -30,6 +30,13 @@ export interface CliDeps {
 
 const DEFAULT_INTENT = "onboard an AI coding agent to contribute changes matching this repo's conventions";
 
+// Used as the default intent when --author is given and --intent is not:
+// mining only your own PRs is normally an OSS-contributor use case ("what did
+// maintainers push back on across my PRs, and what should I stop repeating"),
+// which is a different job than the general onboarding-intent default above.
+const AUTHOR_DEFAULT_INTENT =
+  "document the review feedback these authors received and the standing lessons, so future contributions don't repeat past mistakes";
+
 export const USAGE = `usage: prlore mine <owner/repo> [options]
 
   --intent <text>           what the resulting doc should help with
@@ -37,6 +44,11 @@ export const USAGE = `usage: prlore mine <owner/repo> [options]
   --since <ISO-datetime>     only PRs updated at/after this timestamp
   --days <n>                 only PRs updated in the last <n> days
                              (--since and --days are mutually exclusive)
+  --author <login>           only mine PRs authored by this login
+                             (case-insensitive; repeat --author for multiple
+                             logins). When set and --intent is not given, the
+                             default intent switches to documenting the
+                             review feedback these authors received.
   --budget <usd>             max USD to spend on model calls (default: 10)
   --model <id>                model id override
   --provider <anthropic|claude-cli|auto>
@@ -59,7 +71,7 @@ interface ParsedMineArgs {
 const PROVIDER_VALUES = ["anthropic", "claude-cli", "auto"] as const;
 
 function parseMineArgs(argv: string[], now: () => number): ParsedMineArgs {
-  let values: Record<string, string | boolean | undefined>;
+  let values: Record<string, string | boolean | string[] | undefined>;
   let positionals: string[];
   try {
     ({ values, positionals } = parseArgs({
@@ -70,6 +82,7 @@ function parseMineArgs(argv: string[], now: () => number): ParsedMineArgs {
         intent: { type: "string" },
         since: { type: "string" },
         days: { type: "string" },
+        author: { type: "string", multiple: true },
         budget: { type: "string" },
         model: { type: "string" },
         provider: { type: "string" },
@@ -120,6 +133,14 @@ function parseMineArgs(argv: string[], now: () => number): ParsedMineArgs {
 
   const repoPath = (values["repo-path"] as string | undefined) ?? process.cwd();
   const target = (values.target as string | undefined) ?? "AGENTS.md";
+  const authors = (values.author as string[] | undefined) ?? [];
+
+  // --author changes the default *intent* (not just the config's authors
+  // filter) when --intent isn't given explicitly: mining only your own PRs
+  // is normally the "lessons from maintainer feedback" use case, which reads
+  // oddly with the generic onboarding-intent default.
+  const intent =
+    (values.intent as string | undefined) ?? (authors.length > 0 ? AUTHOR_DEFAULT_INTENT : DEFAULT_INTENT);
 
   return {
     repoPath,
@@ -127,7 +148,8 @@ function parseMineArgs(argv: string[], now: () => number): ParsedMineArgs {
     dryRun: (values["dry-run"] as boolean | undefined) ?? false,
     configInput: {
       repo,
-      intent: (values.intent as string | undefined) ?? DEFAULT_INTENT,
+      intent,
+      authors,
       ...(since !== undefined ? { timeRange: { since } } : {}),
       output: { target },
       model: {

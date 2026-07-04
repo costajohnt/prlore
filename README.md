@@ -36,6 +36,11 @@ usage: prlore mine <owner/repo> [options]
   --since <ISO-datetime>     only PRs updated at/after this timestamp
   --days <n>                 only PRs updated in the last <n> days
                              (--since and --days are mutually exclusive)
+  --author <login>           only mine PRs authored by this login
+                             (case-insensitive; repeat --author for multiple
+                             logins). When set and --intent is not given, the
+                             default intent switches to documenting the
+                             review feedback these authors received.
   --budget <usd>             max USD to spend on model calls (default: 10)
   --model <id>                model id override
   --provider <anthropic|claude-cli|auto>
@@ -57,6 +62,28 @@ resolves to (see "Budget and model notes" below) — with `--provider
 claude-cli` or the `auto` fallback, that's your local Claude Code CLI running
 headless against your subscription, so `prlore mine` works with **zero API
 credentials** on a machine that already has `claude` authenticated.
+
+### Mining your own PRs
+
+If you're an outside contributor rather than a maintainer, `--author` narrows
+mining down to PRs you authored, so the resulting doc becomes a record of the
+review feedback you've gotten and the standing lessons from it, rather than a
+general conventions guide. Authority weighting already does the rest here —
+maintainer comments on your own PRs already drive rule scoring, so no scoring
+changes are needed for this to work; `--author` is purely a client-side filter
+over which PRs get mined at all (GitHub's GraphQL API has no server-side
+author filter on the `pullRequests` connection, so every PR is still fetched
+and paid for at the same rate cost — only the *kept*, and therefore
+model-processed, set gets smaller).
+
+```bash
+prlore mine owner/repo --author yourlogin --days 730
+```
+
+`--author` is repeatable (`--author alice --author bob`) and matches
+case-insensitively. When `--author` is given and `--intent` isn't, the
+default intent switches from the general onboarding phrasing to documenting
+the review feedback these authors received.
 
 ### As an MCP server
 

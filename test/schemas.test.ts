@@ -62,3 +62,17 @@ test("Checkpoint parses and defaults counters", () => {
   });
   expect(cp.counters).toEqual({});
 });
+
+test("MineConfig defaults authors to an empty array", () => {
+  const c = MineConfigSchema.parse({ repo: "owner/name", intent: "x" });
+  expect(c.authors).toEqual([]);
+});
+
+test("MineConfig accepts author logins", () => {
+  const c = MineConfigSchema.parse({ repo: "owner/name", intent: "x", authors: ["CostaJohnT", "octocat"] });
+  expect(c.authors).toEqual(["CostaJohnT", "octocat"]);
+});
+
+test("MineConfig rejects an empty-string author entry", () => {
+  expect(() => MineConfigSchema.parse({ repo: "owner/name", intent: "x", authors: [""] })).toThrow();
+});

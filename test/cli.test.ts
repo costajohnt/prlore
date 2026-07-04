@@ -137,6 +137,78 @@ function baseArgv(repo: string, repoPath: string, extra: string[] = []): string[
   return [repo, "--intent", "test intent", "--repo-path", repoPath, ...extra];
 }
 
+// ---- --author -----------------------------------------------------------------
+
+test("--author repeated twice -> both land in config.authors", async () => {
+  const repoPath = await tmpRepo();
+  const manager = new ScriptedJobManager([readyStatus()], { draft: mkDraft([]), provenance: mkProvenance([mkRule()]), contested: [] });
+  const { stdout, stderr } = streams();
+
+  const code = await runMineCli(
+    ["octo/repo", "--intent", "test intent", "--repo-path", repoPath, "--author", "alice", "--author", "bob"],
+    { makeDeps, manager, stdout, stderr, confirm: async () => true, pollIntervalMs: 0 },
+  );
+
+  expect(code).toBe(0);
+  expect(manager.startCalls).toHaveLength(1);
+  expect(manager.startCalls[0]!.config.authors).toEqual(["alice", "bob"]);
+});
+
+test("--author without --intent switches the default intent to the lessons-learned phrasing", async () => {
+  const repoPath = await tmpRepo();
+  const manager = new ScriptedJobManager([readyStatus()], { draft: mkDraft([]), provenance: mkProvenance([mkRule()]), contested: [] });
+  const { stdout, stderr } = streams();
+
+  const code = await runMineCli(["octo/repo", "--repo-path", repoPath, "--author", "alice"], {
+    makeDeps,
+    manager,
+    stdout,
+    stderr,
+    confirm: async () => true,
+    pollIntervalMs: 0,
+  });
+
+  expect(code).toBe(0);
+  expect(manager.startCalls).toHaveLength(1);
+  expect(manager.startCalls[0]!.config.intent).toMatch(/lessons|standing lessons/i);
+  expect(manager.startCalls[0]!.config.intent).toMatch(/review feedback/i);
+});
+
+test("--author WITH an explicit --intent -> the explicit intent wins", async () => {
+  const repoPath = await tmpRepo();
+  const manager = new ScriptedJobManager([readyStatus()], { draft: mkDraft([]), provenance: mkProvenance([mkRule()]), contested: [] });
+  const { stdout, stderr } = streams();
+
+  const code = await runMineCli(
+    ["octo/repo", "--repo-path", repoPath, "--author", "alice", "--intent", "my custom intent"],
+    { makeDeps, manager, stdout, stderr, confirm: async () => true, pollIntervalMs: 0 },
+  );
+
+  expect(code).toBe(0);
+  expect(manager.startCalls[0]!.config.intent).toBe("my custom intent");
+});
+
+test("no --author -> the existing default intent is unchanged", async () => {
+  const repoPath = await tmpRepo();
+  const manager = new ScriptedJobManager([readyStatus()], { draft: mkDraft([]), provenance: mkProvenance([mkRule()]), contested: [] });
+  const { stdout, stderr } = streams();
+
+  const code = await runMineCli(["octo/repo", "--repo-path", repoPath], {
+    makeDeps,
+    manager,
+    stdout,
+    stderr,
+    confirm: async () => true,
+    pollIntervalMs: 0,
+  });
+
+  expect(code).toBe(0);
+  expect(manager.startCalls[0]!.config.intent).toBe(
+    "onboard an AI coding agent to contribute changes matching this repo's conventions",
+  );
+  expect(manager.startCalls[0]!.config.authors).toEqual([]);
+});
+
 // ---- arg parsing table ------------------------------------------------------------
 
 test("missing positional owner/repo -> usage printed to stderr, exit 2", async () => {

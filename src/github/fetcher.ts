@@ -26,6 +26,7 @@ export interface FetchSummary {
   fetched: number;
   kept: number;
   dropped: number;
+  droppedAuthor: number;
   drifted: number;
   overflowRefetched: number;
   maxUpdatedAt: string | null;
@@ -85,6 +86,23 @@ function bump(cp: Checkpoint, key: string, by = 1): void {
   cp.counters[key] = counter(cp, key) + by;
 }
 
+// GitHub's GraphQL `pullRequests` connection has no author argument, so an
+// authors filter can only be applied client-side, after normalization — there's
+// no way to ask GitHub to page over only one author's PRs. This does not change
+// the rate cost of fetching (every page is still requested and paid for in
+// full); it only changes how many *kept* PRs flow downstream, so LLM/extraction
+// cost scales with the (smaller) filtered kept count, not the raw fetched count.
+//
+// A "ghost" (deleted-account / null) author never matches a non-empty authors
+// list — there is no special-case for it, it simply never appears in `authors`
+// (case-insensitively) and falls through to being dropped like any other
+// non-match.
+function authorMatches(author: string, authors: string[]): boolean {
+  if (authors.length === 0) return true;
+  const login = author.toLowerCase();
+  return authors.some((a) => a.toLowerCase() === login);
+}
+
 export async function fetchCorpus(config: MineConfig, deps: FetchDeps): Promise<FetchSummary> {
   const [owner, name] = config.repo.split("/") as [string, string];
   await preflight(deps.transport, owner, name);
@@ -128,6 +146,14 @@ export async function fetchCorpus(config: MineConfig, deps: FetchDeps): Promise<
         }
         bump(cp, "fetched");
         const result = normalizePr(node, ingest);
+        if (result.kept && !authorMatches(result.pr.author, config.authors)) {
+          // Dropped by the authors filter: counts toward the existing `dropped`
+          // total (preserving the fetched = kept + dropped invariant) plus a
+          // dedicated `droppedAuthor` counter for visibility into why.
+          bump(cp, "dropped");
+          bump(cp, "droppedAuthor");
+          continue;
+        }
         if (result.kept) {
           await appendJsonl(corpusPath, result.pr);
           if (!result.needsOverflow) deps.onPr?.(result.pr);
@@ -188,6 +214,7 @@ export async function fetchCorpus(config: MineConfig, deps: FetchDeps): Promise<
     fetched: counter(cp, "fetched"),
     kept: counter(cp, "kept"),
     dropped: counter(cp, "dropped"),
+    droppedAuthor: counter(cp, "droppedAuthor"),
     drifted,
     overflowRefetched: counter(cp, "overflowRefetched"),
     maxUpdatedAt: cp.maxUpdatedAt,
