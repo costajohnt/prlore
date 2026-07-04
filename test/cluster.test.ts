@@ -8,6 +8,7 @@ interface Draft {
     memberIndexes: number[];
     canonicalStatement: string;
     conflictsWithGroup?: number;
+    generality?: "repo-wide" | "area" | "site-specific";
   }[];
 }
 
@@ -15,18 +16,20 @@ type Script = Draft | "throw";
 
 function fakeProvider(scripts: Script[]) {
   const prompts: string[] = [];
+  const systems: (string | undefined)[] = [];
   let call = 0;
   const p: ModelProvider = {
     spentUsd: () => 0,
-    async complete<T>({ prompt }: CompleteOptions<T>): Promise<T> {
+    async complete<T>({ prompt, system }: CompleteOptions<T>): Promise<T> {
       prompts.push(prompt);
+      systems.push(system);
       const script = scripts[call] ?? scripts[scripts.length - 1]!;
       call++;
       if (script === "throw") throw new Error("model unavailable");
       return script as unknown as T;
     },
   };
-  return { p, prompts, callCount: () => call };
+  return { p, prompts, systems, callCount: () => call };
 }
 
 let quoteSeq = 0;
@@ -285,4 +288,81 @@ test("out-of-range index ignored, no candidate lost", async () => {
   const counts = new Map<string, number>();
   for (const q of allQuotes) counts.set(q, (counts.get(q) ?? 0) + 1);
   expect([...counts.values()].every((n) => n === 1)).toBe(true);
+});
+
+// ---- v0.3 Task 2: generality tags -------------------------------------------
+
+test("cluster prompt documents the three generality tiers", async () => {
+  const c0 = cand("Any convention");
+  const draft: Draft = {
+    groups: [{ memberIndexes: [0], canonicalStatement: "Any convention", generality: "repo-wide" }],
+  };
+  const { p, systems } = fakeProvider([draft]);
+
+  await clusterCandidates([c0], p);
+
+  expect(systems[0]).toContain("site-specific");
+  expect(systems[0]).toContain("area");
+  expect(systems[0]).toContain("repo-wide");
+});
+
+test("generality tag on a draft group rides onto the resulting Cluster", async () => {
+  const c0 = cand("Name the helper buildCursorSuffix directly");
+  const draft: Draft = {
+    groups: [
+      { memberIndexes: [0], canonicalStatement: "Name the helper directly", generality: "site-specific" },
+    ],
+  };
+  const { p } = fakeProvider([draft]);
+
+  const { clusters } = await clusterCandidates([c0], p);
+
+  expect(clusters).toHaveLength(1);
+  expect(clusters[0]!.generality).toBe("site-specific");
+});
+
+test("missing generality on a draft group leaves Cluster.generality undefined (default applied at scoring, not here)", async () => {
+  const c0 = cand("Some repo-wide convention");
+  const draft: Draft = {
+    groups: [{ memberIndexes: [0], canonicalStatement: "Some repo-wide convention" }],
+  };
+  const { p } = fakeProvider([draft]);
+
+  const { clusters } = await clusterCandidates([c0], p);
+
+  expect(clusters[0]!.generality).toBeUndefined();
+});
+
+test("orphaned singleton (candidate not covered by any group) carries no generality tag — no model signal to source one from", async () => {
+  const c0 = cand("Covered candidate");
+  const c1 = cand("Orphaned candidate");
+  const draft: Draft = {
+    groups: [{ memberIndexes: [0], canonicalStatement: "Covered candidate", generality: "area" }],
+  };
+  const { p } = fakeProvider([draft]);
+
+  const { clusters } = await clusterCandidates([c0, c1], p);
+
+  const covered = clusters.find((c) => c.statement === "Covered candidate")!;
+  const orphan = clusters.find((c) => c.statement === "Orphaned candidate")!;
+  expect(covered.generality).toBe("area");
+  expect(orphan.generality).toBeUndefined();
+});
+
+test("fallback draft (throwing bucket) explicitly assigns repo-wide to every produced group", async () => {
+  const c0 = cand("Always pin versions", { category: "process" });
+  const c1 = cand("Pin the lockfile too", { category: "process" });
+  const throwing: ModelProvider = {
+    spentUsd: () => 0,
+    async complete<T>(): Promise<T> {
+      throw new Error("model unavailable");
+    },
+  };
+  const counters = { clusterFallbacks: 0 };
+
+  const { clusters } = await clusterCandidates([c0, c1], throwing, { counters });
+
+  expect(counters.clusterFallbacks).toBe(1);
+  expect(clusters.length).toBeGreaterThan(0);
+  for (const c of clusters) expect(c.generality).toBe("repo-wide");
 });

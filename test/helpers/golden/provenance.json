@@ -10,6 +10,7 @@
       "scope": [],
       "score": 0.4895216066484602,
       "verdict": "corroborated",
+      "generality": "repo-wide",
       "evidence": [
         {
           "pr": 201,
@@ -31,6 +32,7 @@
       "scope": [],
       "score": 0.44483130915880326,
       "verdict": "trending-toward",
+      "generality": "repo-wide",
       "evidence": [
         {
           "pr": 202,
@@ -54,6 +56,7 @@
       "scope": [],
       "score": 0.007150313548329613,
       "verdict": "trending-away",
+      "generality": "repo-wide",
       "evidence": [
         {
           "pr": 203,

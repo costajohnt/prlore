@@ -177,8 +177,8 @@ export async function reconcileClusters(
       continue;
     }
 
-    const scoreA = scoreRule(ruleA.evidence, ruleA.verdict, now());
-    const scoreB = scoreRule(ruleB.evidence, ruleB.verdict, now());
+    const scoreA = scoreRule(ruleA.evidence, ruleA.verdict, now(), ruleA.generality);
+    const scoreB = scoreRule(ruleB.evidence, ruleB.verdict, now(), ruleB.generality);
 
     if (scoreA >= CONTESTED_SCORE_THRESHOLD && scoreB >= CONTESTED_SCORE_THRESHOLD) {
       ruleA.verdict = "contested";

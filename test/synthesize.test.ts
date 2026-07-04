@@ -590,3 +590,98 @@ test("Task 1: recurrence floor drops a single-PR CONTRIBUTOR rule but keeps its 
   const ruleIds = new Set(provenance.rules.map((r) => r.id));
   for (const d of provenance.dropped) expect(ruleIds.has(d.id)).toBe(false);
 });
+
+// ---- v0.3 Task 2: generality-scoped scoring penalty ------------------------
+//
+// Two rules with IDENTICAL scoring inputs (2 distinct CONTRIBUTOR-authored PRs each,
+// no reconcile proposal so both default to "unobservable") in different category
+// buckets (so cluster ids are deterministic: style=0, architecture=1, per the fixed
+// CATEGORIES enumeration order). The cluster call tags one bucket's group
+// "repo-wide" and the other "site-specific" — the only thing that differs. Base
+// score: authority(CONTRIBUTOR)=0.5 x recurrence(2 PRs)=0.75 x corroboration
+// (unobservable)=0.6 = 0.225, which clears INCLUDE_THRESHOLD (0.15) on its own, so
+// this is a genuine anti-vacuous pair: only the 0.5x site-specific multiplier
+// (0.225 x 0.5 = 0.1125 < 0.15) explains the drop, not some other gate (both rules
+// have 2 distinct PRs, so Task 1's recurrence floor exempts both regardless).
+
+const GEN_REPO_WIDE_STATEMENT = "Wrap every outbound api call in the shared retry helper";
+const GEN_SITE_SPECIFIC_STATEMENT = "Wrap every outbound call through buildCursorSuffix directly";
+
+test("Task 2: a site-specific rule's 0.5x penalty drops it below INCLUDE_THRESHOLD while its scoring-identical repo-wide twin survives; provenance carries the tag", async () => {
+  const repo = await buildFixtureRepo();
+
+  const quoteRwA = "please wrap every outbound api call in the shared retry helper";
+  const quoteRwB = "remember to wrap every outbound api call in the shared retry helper always";
+  const quoteSsA = "please wrap every outbound call through buildcursorsuffix directly";
+  const quoteSsB = "remember to wrap every outbound call through buildcursorsuffix directly always";
+
+  const genCandidates: CandidateLearning[] = [
+    {
+      statement: GEN_REPO_WIDE_STATEMENT,
+      category: "style",
+      polarity: "prescriptive",
+      scope: [],
+      evidence: [
+        { pr: 10, author: "contrib1", association: "CONTRIBUTOR", quote: quoteRwA, createdAt: "2026-06-20T00:00:00Z" },
+        { pr: 11, author: "contrib1", association: "CONTRIBUTOR", quote: quoteRwB, createdAt: "2026-06-20T00:00:00Z" },
+      ],
+    },
+    {
+      statement: GEN_SITE_SPECIFIC_STATEMENT,
+      category: "architecture",
+      polarity: "prescriptive",
+      scope: [],
+      evidence: [
+        { pr: 12, author: "contrib1", association: "CONTRIBUTOR", quote: quoteSsA, createdAt: "2026-06-20T00:00:00Z" },
+        { pr: 13, author: "contrib1", association: "CONTRIBUTOR", quote: quoteSsB, createdAt: "2026-06-20T00:00:00Z" },
+      ],
+    },
+  ];
+
+  const mkGenPr = (number: number, quote: string): NormalizedPr => ({
+    number, title: `PR ${number}`, body: `Reviewing this. ${quote}. Thanks!`,
+    author: "contrib1", authorAssociation: "CONTRIBUTOR", state: "MERGED", mergedAt: null,
+    updatedAt: "2026-06-20T00:00:00Z", labels: [], files: [], threads: [], reviews: [], comments: [],
+  });
+  const genPrs: NormalizedPr[] = [
+    mkGenPr(10, quoteRwA), mkGenPr(11, quoteRwB), mkGenPr(12, quoteSsA), mkGenPr(13, quoteSsB),
+  ];
+
+  const genPatterns: PatternsModel = { areas: [], patterns: [], migrations: [], meta: { languages: [], frameworks: [], tooling: [] } };
+
+  const provider: ModelProvider = {
+    spentUsd: () => 0,
+    async complete<T>({ prompt }: CompleteOptions<T>): Promise<T> {
+      if (prompt.startsWith("intent:")) {
+        return { title: "T", overview: "", perArea: false, sections: [{ heading: "All", ruleIds: ["0"] }] } as T;
+      }
+      if (prompt.startsWith("meta:")) {
+        return { proposals: [] } as T; // no proposals -> every cluster defaults to unobservable
+      }
+      if (prompt.includes(GEN_REPO_WIDE_STATEMENT)) {
+        return { groups: [{ memberIndexes: [0], canonicalStatement: GEN_REPO_WIDE_STATEMENT, generality: "repo-wide" }] } as T;
+      }
+      return { groups: [{ memberIndexes: [0], canonicalStatement: GEN_SITE_SPECIFIC_STATEMENT, generality: "site-specific" }] } as T;
+    },
+  };
+
+  const { draft, provenance } = await synthesize(baseConfig, genPatterns, genCandidates, genPrs, {
+    provider,
+    repoPath: repo,
+    now,
+  });
+
+  const survivor = provenance.rules.find((r) => r.statement === GEN_REPO_WIDE_STATEMENT);
+  expect(survivor).toBeDefined();
+  expect(survivor!.generality).toBe("repo-wide");
+  expect(survivor!.score).toBeCloseTo(0.225, 4);
+  expect(draft).toContain(GEN_REPO_WIDE_STATEMENT);
+
+  const droppedRule = provenance.dropped.find((r) => r.statement === GEN_SITE_SPECIFIC_STATEMENT);
+  expect(droppedRule).toBeDefined();
+  expect(droppedRule!.generality).toBe("site-specific");
+  expect(droppedRule!.score).toBeCloseTo(0.1125, 4);
+  expect(droppedRule!.droppedReason).toBeUndefined(); // plain score-threshold drop, not the recurrence floor
+  expect(provenance.rules.some((r) => r.statement === GEN_SITE_SPECIFIC_STATEMENT)).toBe(false);
+  expect(draft).not.toContain(GEN_SITE_SPECIFIC_STATEMENT);
+});

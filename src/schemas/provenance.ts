@@ -7,6 +7,15 @@ export const VerdictSchema = z.enum([
 ]);
 export type Verdict = z.infer<typeof VerdictSchema>;
 
+// v0.3 Task 2: how broadly a rule's guidance applies. "site-specific" rules name a
+// particular function/file/internal (e.g. "always suffix cursor tokens the way
+// buildCursorSuffix does") and only matter to someone touching that one thing;
+// "area" rules apply to one subsystem; "repo-wide" rules apply to any contributor.
+// Tagged by the model in cluster.ts's per-bucket draft; consumed as a scoring
+// penalty in score.ts.
+export const GeneralitySchema = z.enum(["repo-wide", "area", "site-specific"]);
+export type Generality = z.infer<typeof GeneralitySchema>;
+
 export const EvidenceRecordSchema = z.object({
   pr: z.number().int().positive(),
   author: z.string(),
@@ -35,6 +44,13 @@ export const RuleRecordSchema = z.object({
   // (v0.3 Task 1) populates it — score-threshold drops stay reason-less for now,
   // left open for a future task to tag without another schema change.
   droppedReason: z.enum(["recurrence-floor"]).optional(),
+  // Additive, optional (v0.3 Task 2): the generality tag the cluster call assigned
+  // this rule's group, carried through to provenance for auditability. Absent on
+  // old sidecars, synthetic code-only rules, and any cluster the model (or a
+  // deterministic fallback path) didn't tag — score.ts treats absence as
+  // "repo-wide" (no penalty), so this being unset never implies a penalty was
+  // silently dropped.
+  generality: GeneralitySchema.optional(),
 });
 export type RuleRecord = z.infer<typeof RuleRecordSchema>;
 

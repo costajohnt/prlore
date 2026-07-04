@@ -1,4 +1,4 @@
-import type { EvidenceRecord, Verdict } from "../schemas/provenance.js";
+import type { EvidenceRecord, Generality, Verdict } from "../schemas/provenance.js";
 import { MONTH_MS } from "../util/time.js";
 import { HIGH_AUTHORITY } from "./authority.js";
 
@@ -82,13 +82,35 @@ export function failsRecurrenceFloor(evidence: EvidenceRecord[]): boolean {
   return distinctPrs < RECURRENCE_FLOOR_MIN_PRS && !hasMaintainerEvidence;
 }
 
-export function scoreRule(evidence: EvidenceRecord[], verdict: Verdict, now: number): number {
+// Generality-scoped scoring penalty (spec v0.3 Task 2): a rule that only matters
+// for one specific function/file/internal shouldn't stand at the same weight as a
+// repo-wide norm — the ink acceptance run elevated one-off bug-fix narratives
+// (rules naming a particular internal helper) to the same standing as genuine
+// conventions. Exported so tests can assert the exact multipliers directly.
+export const GENERALITY_MULTIPLIER: Record<Generality, number> = {
+  "repo-wide": 1.0,
+  area: 0.85,
+  "site-specific": 0.5,
+};
+
+// Missing/absent tag (old cached paths predating this field, code-only synthetic
+// rules from mergeCodeOnlyPatterns, or a cluster orphaned with no draft group to
+// source a tag from) is treated as "repo-wide" — no penalty. This is the
+// back-compat default: only an explicit area/site-specific tag can reduce a score.
+function generalityMultiplierOf(generality: Generality | undefined): number {
+  return GENERALITY_MULTIPLIER[generality ?? "repo-wide"];
+}
+
+export function scoreRule(evidence: EvidenceRecord[], verdict: Verdict, now: number, generality?: Generality): number {
+  const generalityWeight = generalityMultiplierOf(generality);
   if (verdict === "unobservable") {
     // Spec §6.3: keep iff authority × recurrence clears threshold. Recency is
     // deliberately omitted here — process norms (e.g. "PRs need two approvals")
     // aren't re-corroborated by code activity, so time-decay would wrongly kill
     // an otherwise-stable norm just because nobody re-typed it recently.
-    return authorityOf(evidence) * recurrenceOf(evidence) * corroborationOf(verdict);
+    return authorityOf(evidence) * recurrenceOf(evidence) * corroborationOf(verdict) * generalityWeight;
   }
-  return authorityOf(evidence) * recurrenceOf(evidence) * recencyOf(evidence, now) * corroborationOf(verdict);
+  return (
+    authorityOf(evidence) * recurrenceOf(evidence) * recencyOf(evidence, now) * corroborationOf(verdict) * generalityWeight
+  );
 }

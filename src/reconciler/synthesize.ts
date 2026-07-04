@@ -31,7 +31,11 @@ export interface SynthesizeDeps {
 }
 
 function toRuleRecord(rule: ReconciledRule, nowMs: number): RuleRecord {
-  const score = rule.syntheticScore ?? scoreRule(rule.evidence, rule.verdict, nowMs);
+  // syntheticScore (mergeCodeOnlyPatterns) already bakes in its own confidence-derived
+  // value and bypasses scoreRule entirely, so it also bypasses the generality penalty —
+  // consistent with those rules never carrying a generality tag (probe-verified
+  // code-only patterns, not model-tagged clusters).
+  const score = rule.syntheticScore ?? scoreRule(rule.evidence, rule.verdict, nowMs, rule.generality);
   const lastCorroborated =
     rule.verdict === "corroborated" || rule.verdict === "trending-toward"
       ? new Date(nowMs).toISOString()
@@ -45,6 +49,7 @@ function toRuleRecord(rule: ReconciledRule, nowMs: number): RuleRecord {
     score,
     verdict: rule.verdict,
     ...(rule.rationale ? { rationale: rule.rationale } : {}),
+    ...(rule.generality ? { generality: rule.generality } : {}),
     evidence: rule.evidence,
     exemplars: rule.exemplars,
     lastCorroborated,

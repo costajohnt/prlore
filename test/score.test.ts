@@ -1,8 +1,8 @@
 import { expect, test } from "vitest";
 import type { EvidenceRecord } from "../src/schemas/provenance.js";
 import {
-  INCLUDE_THRESHOLD, RECURRENCE_FLOOR_MIN_PRS, SCORING, authorityOf, corroborationOf,
-  failsRecurrenceFloor, recencyOf, recurrenceOf, scoreRule,
+  GENERALITY_MULTIPLIER, INCLUDE_THRESHOLD, RECURRENCE_FLOOR_MIN_PRS, SCORING, authorityOf,
+  corroborationOf, failsRecurrenceFloor, recencyOf, recurrenceOf, scoreRule,
 } from "../src/reconciler/score.js";
 
 const NOW = new Date("2026-07-01T00:00:00Z").getTime();
@@ -151,4 +151,51 @@ test("failsRecurrenceFloor: an unverified second PR cannot buy exemption via rec
 
 test("failsRecurrenceFloor: no evidence at all fails the floor (callers must exempt synthetic rules separately)", () => {
   expect(failsRecurrenceFloor([])).toBe(true);
+});
+
+// ---- v0.3 Task 2: generality-scoped scoring penalty ------------------------
+
+test("GENERALITY_MULTIPLIER: documents the binding tier multipliers (1.0 / 0.85 / 0.5)", () => {
+  expect(GENERALITY_MULTIPLIER["repo-wide"]).toBe(1.0);
+  expect(GENERALITY_MULTIPLIER.area).toBe(0.85);
+  expect(GENERALITY_MULTIPLIER["site-specific"]).toBe(0.5);
+});
+
+test("scoreRule: missing generality behaves identically to an explicit repo-wide tag (back-compat default, no penalty)", () => {
+  const evidence = [ev({ association: "OWNER", createdAt: "2026-07-01T00:00:00Z" })];
+  expect(scoreRule(evidence, "corroborated", NOW)).toBeCloseTo(
+    scoreRule(evidence, "corroborated", NOW, "repo-wide"),
+    6,
+  );
+});
+
+test("scoreRule: area tier applies the 0.85 multiplier", () => {
+  const evidence = [ev({ association: "OWNER", createdAt: "2026-07-01T00:00:00Z" })];
+  const base = scoreRule(evidence, "corroborated", NOW);
+  expect(scoreRule(evidence, "corroborated", NOW, "area")).toBeCloseTo(base * 0.85, 5);
+});
+
+// Anti-vacuous pair: IDENTICAL evidence and verdict, only the generality tag differs.
+// A broken implementation that never applies the penalty (or applies it uniformly)
+// would make both scores land on the same side of INCLUDE_THRESHOLD.
+test("scoreRule anti-vacuous pair: a site-specific rule's 0.5x penalty drops it below INCLUDE_THRESHOLD while its untagged (repo-wide) twin survives", () => {
+  const evidence = [
+    ev({ pr: 1, association: "CONTRIBUTOR", createdAt: "2026-06-25T00:00:00Z" }),
+    ev({ pr: 2, association: "CONTRIBUTOR", createdAt: "2026-06-25T00:00:00Z" }),
+  ];
+  // authority(CONTRIBUTOR)=0.5 x recurrence(2 PRs)=0.75 x corroboration(unobservable)=0.6 = 0.225
+  const repoWideScore = scoreRule(evidence, "unobservable", NOW);
+  const siteSpecificScore = scoreRule(evidence, "unobservable", NOW, "site-specific");
+  expect(repoWideScore).toBeCloseTo(0.225, 5);
+  expect(repoWideScore).toBeGreaterThanOrEqual(INCLUDE_THRESHOLD);
+  expect(siteSpecificScore).toBeCloseTo(0.1125, 5);
+  expect(siteSpecificScore).toBeLessThan(INCLUDE_THRESHOLD);
+});
+
+test("scoreRule: contested still scores 0 regardless of the generality tag", () => {
+  const evidence = [ev({ association: "OWNER" })];
+  expect(scoreRule(evidence, "contested", NOW, "site-specific")).toBe(0);
+  expect(scoreRule(evidence, "contested", NOW, "area")).toBe(0);
+  expect(scoreRule(evidence, "contested", NOW, "repo-wide")).toBe(0);
+  expect(scoreRule(evidence, "contested", NOW)).toBe(0);
 });

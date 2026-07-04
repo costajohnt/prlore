@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { BudgetExceededError, type ModelProvider } from "../model/provider.js";
-import type { EvidenceRecord } from "../schemas/provenance.js";
+import { GeneralitySchema, type EvidenceRecord, type Generality } from "../schemas/provenance.js";
 import type { VerifiedCandidate } from "./verify-evidence.js";
 
 export interface Cluster {
@@ -11,6 +11,13 @@ export interface Cluster {
   scope: string[];
   evidence: EvidenceRecord[];
   rationale?: string;
+  // v0.3 Task 2: how broadly this rule applies (see schemas/provenance.ts). Optional
+  // at this type level even though the draft schema below requires it from the
+  // model — a cluster can still end up without one via the deterministic fallback
+  // path assigning it explicitly (see fallbackDraft) or an orphaned singleton with
+  // no draft group to source a tag from (see the "never lose a candidate" loop).
+  // score.ts treats an absent tag as "repo-wide" (no penalty).
+  generality?: Generality;
 }
 
 const ClusterDraftSchema = z.object({
@@ -19,6 +26,12 @@ const ClusterDraftSchema = z.object({
       memberIndexes: z.array(z.number().int().min(0)),
       canonicalStatement: z.string().min(1),
       conflictsWithGroup: z.number().int().min(0).optional(),
+      // Required: schema-hint renders shapes into prompts, so the model always
+      // sees this field is expected. A real provider's schema.parse() throws if
+      // the model omits it, which clusterCandidates' existing catch already
+      // handles the same way as any other draft failure — falling back to
+      // fallbackDraft (which assigns "repo-wide" itself; see below).
+      generality: GeneralitySchema,
     }),
   ),
 });
@@ -29,8 +42,10 @@ const SYSTEM = `You group candidate engineering conventions that assert the SAME
 Two candidates belong in the same group only if they state the same rule about the same topic,
 even if phrased differently. If two groups give OPPOSITE guidance about the same topic (e.g.
 "always do X" vs "never do X"), keep them as separate groups and link them by setting
-conflictsWithGroup on one group to the other group's index in the groups array. Respond with
-ONLY JSON matching the schema.`;
+conflictsWithGroup on one group to the other group's index in the groups array. Also tag each
+group's generality: "site-specific" if the rule only matters when touching one particular
+function/file/internal (e.g. it names a specific helper), "area" if it applies to one subsystem,
+or "repo-wide" if any contributor would hit it. Respond with ONLY JSON matching the schema.`;
 
 // Fixed enumeration order: buckets are processed in this order regardless of input order,
 // so global cluster ids are deterministic across runs for the same candidate set.
@@ -112,6 +127,7 @@ function buildCluster(
   statement: string,
   category: Cluster["category"],
   members: VerifiedCandidate[],
+  generality?: Generality,
 ): Cluster {
   const rationale = firstRationale(members);
   return {
@@ -122,11 +138,16 @@ function buildCluster(
     scope: mergeScope(members),
     evidence: mergeEvidence(members),
     ...(rationale ? { rationale } : {}),
+    ...(generality ? { generality } : {}),
   };
 }
 
 // Deterministic fallback: identical (whitespace/case normalized) statements merge into
 // one group; canonical statement is the first member's own statement. No conflict pairs.
+// generality is explicitly "repo-wide" for every group here: this path carries no model
+// signal at all (the provider call itself failed), and back-compat default treats a
+// missing tag as no-penalty anyway — setting it explicitly just documents that these
+// groups were never model-tagged rather than leaving it ambiguous with a real tag.
 function fallbackDraft(bucket: VerifiedCandidate[]): ClusterDraft {
   const groups: DraftGroup[] = [];
   const indexByKey = new Map<string, number>();
@@ -135,7 +156,7 @@ function fallbackDraft(bucket: VerifiedCandidate[]): ClusterDraft {
     const gi = indexByKey.get(key);
     if (gi === undefined) {
       indexByKey.set(key, groups.length);
-      groups.push({ memberIndexes: [i], canonicalStatement: c.statement });
+      groups.push({ memberIndexes: [i], canonicalStatement: c.statement, generality: "repo-wide" });
     } else {
       groups[gi]!.memberIndexes.push(i);
     }
@@ -199,10 +220,12 @@ export async function clusterCandidates(
       const members = memberIndexes.map((i) => bucket[i]!);
       const id = nextId++;
       groupGlobalIds.push(id);
-      clusters.push(buildCluster(id, group.canonicalStatement, category, members));
+      clusters.push(buildCluster(id, group.canonicalStatement, category, members, group.generality));
     }
 
-    // Never lose a candidate: anything not assigned to a surviving group becomes its own singleton.
+    // Never lose a candidate: anything not assigned to a surviving group becomes its own
+    // singleton with no generality tag — there's no draft group to source one from.
+    // score.ts treats the absence as "repo-wide" (no penalty).
     for (let i = 0; i < bucket.length; i++) {
       if (assigned.has(i)) continue;
       const c = bucket[i]!;

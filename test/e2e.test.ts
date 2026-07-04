@@ -261,10 +261,14 @@ function scriptedProvider(): ModelProvider {
       }
       // cluster call: one singleton group per "[i] statement (polarity)" candidate
       // line -- same convention test/synthesize.test.ts's scriptedProvider uses.
+      // generality: "repo-wide" for every group -- this golden test predates v0.3
+      // Task 2's tag and its expected output must stay byte-identical, so every
+      // group gets the no-penalty tier explicitly (required by ClusterDraftSchema).
       const lines = prompt.split("\n").filter((l) => /^\[\d+]/.test(l));
       const groups = lines.map((line, i) => ({
         memberIndexes: [i],
         canonicalStatement: line.replace(/^\[\d+]\s*/, "").replace(/ \((?:prescriptive|proscriptive)\)$/, ""),
+        generality: "repo-wide",
       }));
       return schema.parse({ groups });
     },
