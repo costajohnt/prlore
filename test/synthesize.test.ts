@@ -462,3 +462,131 @@ test("Fix 6: a 3b conflict-pair contested outcome merges both sides into a singl
   expect(contested[0]!.sides.find((s) => s.statement === "Use spaces for indentation")!.evidence).toHaveLength(3);
   expect(provenance.contested).toEqual(contested);
 });
+
+// ---- v0.3 Task 1: recurrence floor + synthetic exemption -------------------
+//
+// One rule per bucket keeps cluster ids deterministic (style=0, architecture=1,
+// process=2, matching the fixed CATEGORIES enumeration order and skipping the
+// empty testing/tooling/domain buckets) without needing a scripted cluster
+// response — both the cluster and plan calls are made to fall back to their
+// deterministic degradation paths (see cluster.ts's fallbackDraft / select.ts's
+// fallbackDraft) by throwing for any prompt that isn't the reconcile ("meta:")
+// call, so only the reconcile proposals need to be scripted.
+
+test("Task 1: recurrence floor drops a single-PR CONTRIBUTOR rule but keeps its anti-vacuous twins (1-PR OWNER, 2-PR CONTRIBUTOR) and exempts a synthetic code-only rule", async () => {
+  const repo = await buildFixtureRepo();
+
+  const QUOTE_FLOOR = "please rename these temp helper variables to snake case for consistency";
+  const QUOTE_OWNER = "always store secrets in vault and never inline them in the codebase";
+  const QUOTE_SQUASH_A = "please squash your commits into one before merging this branch";
+  const QUOTE_SQUASH_B = "remember to squash commits together before merge every single time";
+
+  const floorCandidates: CandidateLearning[] = [
+    {
+      statement: "Rename temp variables to snake_case",
+      category: "style",
+      polarity: "prescriptive",
+      scope: [],
+      evidence: [
+        { pr: 1, author: "contrib1", association: "CONTRIBUTOR", quote: QUOTE_FLOOR, createdAt: "2026-06-15T00:00:00Z" },
+      ],
+    },
+    {
+      statement: "Store secrets in vault only",
+      category: "architecture",
+      polarity: "prescriptive",
+      scope: [],
+      evidence: [
+        { pr: 2, author: "owner1", association: "OWNER", quote: QUOTE_OWNER, createdAt: "2026-06-15T00:00:00Z" },
+      ],
+    },
+    {
+      statement: "Squash commits before merging",
+      category: "process",
+      polarity: "prescriptive",
+      scope: [],
+      evidence: [
+        { pr: 3, author: "contrib1", association: "CONTRIBUTOR", quote: QUOTE_SQUASH_A, createdAt: "2026-06-15T00:00:00Z" },
+        { pr: 4, author: "contrib1", association: "CONTRIBUTOR", quote: QUOTE_SQUASH_B, createdAt: "2026-06-15T00:00:00Z" },
+      ],
+    },
+  ];
+
+  const mkFloorPr = (number: number, body: string, association: NormalizedPr["authorAssociation"]): NormalizedPr => ({
+    number, title: `PR ${number}`, body, author: "someone", authorAssociation: association,
+    state: "MERGED", mergedAt: null, updatedAt: "2026-06-15T00:00:00Z",
+    labels: [], files: [], threads: [], reviews: [], comments: [],
+  });
+
+  const floorPrs: NormalizedPr[] = [
+    mkFloorPr(1, `Style nit: ${QUOTE_FLOOR}. Thanks!`, "CONTRIBUTOR"),
+    mkFloorPr(2, `Architecture: ${QUOTE_OWNER}. Non-negotiable.`, "OWNER"),
+    mkFloorPr(3, `Process note: ${QUOTE_SQUASH_A}.`, "CONTRIBUTOR"),
+    mkFloorPr(4, `Reminder: ${QUOTE_SQUASH_B}.`, "CONTRIBUTOR"),
+  ];
+
+  // Uncovered by any candidate statement above (no shared >=5-char word) -> becomes
+  // synthetic rule "code-0" via mergeCodeOnlyPatterns, with empty PR evidence.
+  const floorPatterns: PatternsModel = {
+    areas: [],
+    patterns: [
+      { statement: "Document every public API endpoint thoroughly", scope: [], exemplars: ["src/api.ts"], confidence: 0.4 },
+    ],
+    migrations: [],
+    meta: { languages: [], frameworks: [], tooling: [] },
+  };
+
+  const provider: ModelProvider = {
+    spentUsd: () => 0,
+    async complete<T>({ prompt }: CompleteOptions<T>): Promise<T> {
+      if (prompt.startsWith("meta:")) {
+        return {
+          proposals: [
+            { clusterId: 0, proposedVerdict: "corroborated" },
+            { clusterId: 1, proposedVerdict: "corroborated" },
+            { clusterId: 2, proposedVerdict: "corroborated" },
+          ],
+        } as T;
+      }
+      // Cluster and plan calls both fall back to their deterministic paths.
+      throw new Error("no-op: clustering and planning both fall back deterministically");
+    },
+  };
+
+  const { draft, provenance } = await synthesize(baseConfig, floorPatterns, floorCandidates, floorPrs, {
+    provider,
+    repoPath: repo,
+    now,
+  });
+
+  // Floored: a 1-PR CONTRIBUTOR rule. Its raw score (authority 0.5 x recurrence 0.5 x
+  // recency ~1 x corroboration 1 = 0.25) clears INCLUDE_THRESHOLD (0.15) on its own,
+  // which is exactly why this must be asserted against dropped/draft rather than
+  // just trusting the score comparison — the floor is a genuinely separate gate.
+  const floored = provenance.dropped.find((r) => r.statement === "Rename temp variables to snake_case");
+  expect(floored).toBeDefined();
+  expect(floored!.droppedReason).toBe("recurrence-floor");
+  expect(provenance.rules.some((r) => r.statement === "Rename temp variables to snake_case")).toBe(false);
+  expect(draft).not.toContain("Rename temp variables to snake_case");
+
+  // Anti-vacuous twin #1: a 1-PR OWNER rule survives — maintainer-tier evidence exempts it.
+  const ownerRule = provenance.rules.find((r) => r.statement === "Store secrets in vault only");
+  expect(ownerRule).toBeDefined();
+  expect(ownerRule!.droppedReason).toBeUndefined();
+  expect(draft).toContain("Store secrets in vault only");
+
+  // Anti-vacuous twin #2: a 2-distinct-PR CONTRIBUTOR rule survives — recurrence clears the floor.
+  const squashRule = provenance.rules.find((r) => r.statement === "Squash commits before merging");
+  expect(squashRule).toBeDefined();
+  expect(draft).toContain("Squash commits before merging");
+
+  // Synthetic code-only rule (mergeCodeOnlyPatterns, no PR evidence at all) is exempt.
+  const synthetic = provenance.rules.find((r) => r.id === "code-0");
+  expect(synthetic).toBeDefined();
+  expect(synthetic!.evidence).toEqual([]);
+  expect(draft).toContain("Document every public API endpoint thoroughly");
+
+  // Disjoint three-way split still holds: nothing appears in both rules and dropped.
+  const ruleIds = new Set(provenance.rules.map((r) => r.id));
+  for (const d of provenance.dropped) expect(ruleIds.has(d.id)).toBe(false);
+});

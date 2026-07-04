@@ -8,6 +8,14 @@ import { atomicWriteFile } from "../state/atomic.js";
 // treated as the per-area trigger. Accepted as-is for v1 — no smarter heuristic.
 const AUTO_LAYOUT_LINE_THRESHOLD = 400;
 
+// v0.3 Task 1: a draft over this many UTF-8 bytes (~6k tokens) also trips the
+// per-area trigger, whichever of the two thresholds hits first. Line count alone
+// is gameable: the ink acceptance run produced a 44KB single-file doc that
+// stayed under 400 lines because its rules rendered as very long individual
+// lines, dodging the line-count check entirely despite being far too large to
+// read as one file.
+const AUTO_LAYOUT_BYTE_THRESHOLD = 24_000;
+
 export interface EmitTarget {
   repoPath: string;
   target: string; // e.g. "AGENTS.md"
@@ -176,7 +184,8 @@ export async function emitDraft(
   const { repoPath, target, layout } = targetInfo;
   const effectiveLayout: "single" | "per-area" =
     layout === "auto"
-      ? draft.split("\n").length > AUTO_LAYOUT_LINE_THRESHOLD
+      ? draft.split("\n").length > AUTO_LAYOUT_LINE_THRESHOLD ||
+        Buffer.byteLength(draft, "utf8") > AUTO_LAYOUT_BYTE_THRESHOLD
         ? "per-area"
         : "single"
       : layout;

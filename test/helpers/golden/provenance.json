@@ -65,7 +65,8 @@
         }
       ],
       "exemplars": [],
-      "lastCorroborated": null
+      "lastCorroborated": null,
+      "droppedReason": "recurrence-floor"
     }
   ],
   "contested": []

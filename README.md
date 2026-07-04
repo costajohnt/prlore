@@ -196,3 +196,17 @@ script-built fixture git repo.
 - Single repo per run; no GitLab/Bitbucket support; no continuous ingestion or
   webhooks — this is a batch tool you re-run, not a review bot or an
   enforcement tool.
+- **Recurrence floor (always on, not configurable).** A non-contested rule
+  backed by fewer than 2 distinct PRs, with no maintainer-tier (owner/member/
+  collaborator) evidence, is demoted to `provenance.dropped` with
+  `droppedReason: "recurrence-floor"` even if it would otherwise clear the
+  score threshold — this filters out single-PR trivia (a one-off nit that
+  happened to get said with confidence) without needing a config knob.
+  Synthetic code-only rules (derived purely from codebase patterns, with no
+  PR evidence) are exempt. Nothing is silently discarded: floored rules stay
+  in the provenance sidecar with their reason, just not in the rendered doc.
+- **Auto layout also triggers on draft size in bytes, not just line count.**
+  `layout: "auto"` switches from a single file to per-area files once the
+  draft exceeds 400 lines OR 24,000 bytes (~6k tokens), whichever trips
+  first — a handful of very long rule lines can blow past a reasonable doc
+  size while staying under the line-count check alone.

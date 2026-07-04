@@ -17,7 +17,7 @@ import { loadCheckpoint, saveCheckpoint } from "../state/checkpoint.js";
 import { clusterCandidates } from "./cluster.js";
 import { mergeCodeOnlyPatterns, reconcileClusters, type ReconciledRule } from "./reconcile.js";
 import { renderDraft } from "./render.js";
-import { authorityOf, INCLUDE_THRESHOLD, recurrenceOf, scoreRule } from "./score.js";
+import { authorityOf, failsRecurrenceFloor, INCLUDE_THRESHOLD, recurrenceOf, scoreRule } from "./score.js";
 import { planDoc } from "./select.js";
 import { verifyEvidence } from "./verify-evidence.js";
 
@@ -150,6 +150,14 @@ export async function synthesize(
       continue;
     }
     const record = toRuleRecord(rule, now());
+    // Recurrence floor, after scoring but before the include-threshold split (spec
+    // v0.3 Task 1): synthetic code-only rules (mergeCodeOnlyPatterns — no PR evidence
+    // at all) are exempt, since they're probe-verified against the codebase, not
+    // gossip from a single PR thread.
+    if (rule.syntheticScore === undefined && failsRecurrenceFloor(rule.evidence)) {
+      dropped.push({ ...record, droppedReason: "recurrence-floor" });
+      continue;
+    }
     if (record.score < INCLUDE_THRESHOLD) dropped.push(record);
     else rules.push(record);
   }

@@ -1,7 +1,8 @@
 import { expect, test } from "vitest";
 import type { EvidenceRecord } from "../src/schemas/provenance.js";
 import {
-  INCLUDE_THRESHOLD, SCORING, authorityOf, corroborationOf, recencyOf, recurrenceOf, scoreRule,
+  INCLUDE_THRESHOLD, RECURRENCE_FLOOR_MIN_PRS, SCORING, authorityOf, corroborationOf,
+  failsRecurrenceFloor, recencyOf, recurrenceOf, scoreRule,
 } from "../src/reconciler/score.js";
 
 const NOW = new Date("2026-07-01T00:00:00Z").getTime();
@@ -110,4 +111,44 @@ test("other verdicts still apply recency decay (unchanged behavior)", () => {
   const stale = [ev({ association: "OWNER", createdAt: "2020-01-01T00:00:00Z" })];
   const fresh = [ev({ association: "OWNER", createdAt: "2026-07-01T00:00:00Z" })];
   expect(scoreRule(stale, "corroborated", NOW)).toBeLessThan(scoreRule(fresh, "corroborated", NOW));
+});
+
+// ---- v0.3 Task 1: recurrence floor -----------------------------------------
+
+test("failsRecurrenceFloor: constant is 2 distinct PRs (documents the binding threshold)", () => {
+  expect(RECURRENCE_FLOOR_MIN_PRS).toBe(2);
+});
+
+test("failsRecurrenceFloor: a single-PR CONTRIBUTOR-only rule fails the floor", () => {
+  expect(failsRecurrenceFloor([ev({ pr: 1, association: "CONTRIBUTOR" })])).toBe(true);
+});
+
+test("failsRecurrenceFloor: a single-PR OWNER rule is exempt (maintainer-tier evidence)", () => {
+  expect(failsRecurrenceFloor([ev({ pr: 1, association: "OWNER" })])).toBe(false);
+});
+
+test("failsRecurrenceFloor: a two-distinct-PR CONTRIBUTOR rule is exempt (recurrence clears it)", () => {
+  expect(
+    failsRecurrenceFloor([ev({ pr: 1, association: "CONTRIBUTOR" }), ev({ pr: 2, association: "CONTRIBUTOR" })]),
+  ).toBe(false);
+});
+
+test("failsRecurrenceFloor: the same PR quoted twice is still one distinct PR — fails the floor", () => {
+  expect(
+    failsRecurrenceFloor([ev({ pr: 1, association: "CONTRIBUTOR" }), ev({ pr: 1, association: "CONTRIBUTOR" })]),
+  ).toBe(true);
+});
+
+test("failsRecurrenceFloor: an UNVERIFIED OWNER claim cannot buy exemption — spoof-proof like authorityOf", () => {
+  expect(failsRecurrenceFloor([ev({ pr: 1, association: "OWNER", verified: false })])).toBe(true);
+});
+
+test("failsRecurrenceFloor: an unverified second PR cannot buy exemption via recurrence either", () => {
+  expect(
+    failsRecurrenceFloor([ev({ pr: 1, association: "CONTRIBUTOR" }), ev({ pr: 2, association: "CONTRIBUTOR", verified: false })]),
+  ).toBe(true);
+});
+
+test("failsRecurrenceFloor: no evidence at all fails the floor (callers must exempt synthetic rules separately)", () => {
+  expect(failsRecurrenceFloor([])).toBe(true);
 });

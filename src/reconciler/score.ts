@@ -64,6 +64,24 @@ export function corroborationOf(verdict: Verdict): number {
   return SCORING.corroboration[verdict];
 }
 
+// Recurrence-floor gate (spec v0.3 Task 1): distinct from the score threshold below.
+// A rule backed by a single low-authority PR is exactly the "single-PR trivia" the
+// ink acceptance run flagged (e.g. "showcase entries need 100+ stars") — it can still
+// clear INCLUDE_THRESHOLD on authority*recurrence*recency alone, so the floor has to
+// be checked as its own gate, not folded into the threshold comparison.
+export const RECURRENCE_FLOOR_MIN_PRS = 2;
+
+// Only VERIFIED evidence counts for both the distinct-PR count and the
+// maintainer-tier check — same spoof-resistance principle as authorityOf/recurrenceOf:
+// an unverified entry's claimed PR number or association is model-asserted and was
+// never corroborated against the actual PR, so it must never be able to buy a rule's
+// way past the floor.
+export function failsRecurrenceFloor(evidence: EvidenceRecord[]): boolean {
+  const distinctPrs = new Set(evidence.filter((e) => e.verified).map((e) => e.pr)).size;
+  const hasMaintainerEvidence = evidence.some((e) => e.verified && HIGH_AUTHORITY.has(e.association));
+  return distinctPrs < RECURRENCE_FLOOR_MIN_PRS && !hasMaintainerEvidence;
+}
+
 export function scoreRule(evidence: EvidenceRecord[], verdict: Verdict, now: number): number {
   if (verdict === "unobservable") {
     // Spec §6.3: keep iff authority × recurrence clears threshold. Recency is

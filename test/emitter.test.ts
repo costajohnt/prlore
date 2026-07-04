@@ -285,3 +285,38 @@ test("auto layout switches to per-area when the draft exceeds 400 lines", async 
   const authStub = await readFile(join(repoPath, "auth", "AGENTS.md"), "utf8");
   expect(authStub).toContain("Hash passwords with bcrypt");
 });
+
+// ---- v0.3 Task 1: byte-based auto layout ------------------------------------
+//
+// The ink acceptance run produced a 44KB single-file doc that dodged the
+// line-count check entirely because its rules rendered as very long individual
+// lines (~150 lines total). A byte-length trigger closes that gap.
+
+test("auto layout switches to per-area when the draft is under 400 lines but exceeds the 24KB byte threshold", async () => {
+  const repoPath = await tmpRepo();
+  await mkdir(join(repoPath, "auth"), { recursive: true });
+  const authRule = mkRule({ id: "a1", statement: "Hash passwords with bcrypt", scope: ["auth/login.ts"] });
+  const provenance = mkProvenance([authRule]);
+  // One giant line (simulating a long single-PR rule statement): well under 400
+  // lines, well over 24,000 bytes.
+  const longSingleLineDraft = `# Conventions\n\n${"x".repeat(30_000)}\n`;
+  expect(longSingleLineDraft.split("\n").length).toBeLessThan(400);
+  expect(Buffer.byteLength(longSingleLineDraft, "utf8")).toBeGreaterThan(24_000);
+
+  await emitDraft(longSingleLineDraft, provenance, { repoPath, target: "AGENTS.md", layout: "auto" });
+
+  const authStub = await readFile(join(repoPath, "auth", "AGENTS.md"), "utf8");
+  expect(authStub).toContain("Hash passwords with bcrypt");
+});
+
+test("auto layout stays single when the draft is under BOTH the line and byte thresholds", async () => {
+  const repoPath = await tmpRepo();
+  await mkdir(join(repoPath, "auth"), { recursive: true });
+  const authRule = mkRule({ id: "a1", statement: "Hash passwords with bcrypt", scope: ["auth/login.ts"] });
+  const provenance = mkProvenance([authRule]);
+  const shortDraft = "# Conventions\n\nJust a few short lines.\n";
+
+  await emitDraft(shortDraft, provenance, { repoPath, target: "AGENTS.md", layout: "auto" });
+
+  await expect(stat(join(repoPath, "auth", "AGENTS.md"))).rejects.toThrow();
+});

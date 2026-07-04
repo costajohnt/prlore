@@ -29,6 +29,12 @@ export const RuleRecordSchema = z.object({
   evidence: z.array(EvidenceRecordSchema),
   exemplars: z.array(z.string()),
   lastCorroborated: z.string().nullable(),
+  // Additive, optional (0.2.x sidecars stay parseable): why a record landed in
+  // provenance.dropped rather than the rendered doc. Only ever set on dropped
+  // records; "rules" entries never carry it. Currently only "recurrence-floor"
+  // (v0.3 Task 1) populates it — score-threshold drops stay reason-less for now,
+  // left open for a future task to tag without another schema change.
+  droppedReason: z.enum(["recurrence-floor"]).optional(),
 });
 export type RuleRecord = z.infer<typeof RuleRecordSchema>;
 
