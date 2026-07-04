@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { BudgetExceededError, type CompleteOptions, type ModelProvider } from "./provider.js";
+import { appendSchemaHint } from "./schema-hint.js";
 
 const DEFAULT_MODEL = "claude-sonnet-5";
 // USD per MTok, sticker prices (intro discounts ignored so tracking over-estimates).
@@ -46,10 +47,11 @@ export class AnthropicProvider implements ModelProvider {
       if (this.spent >= this.opts.maxBudgetUsd) {
         throw new BudgetExceededError(this.spent, this.opts.maxBudgetUsd);
       }
-      const content =
+      const basePrompt =
         attempt === 0
           ? prompt
           : `${prompt}\n\nYour previous reply was invalid: ${lastError}\nReply with ONLY valid JSON matching the requested shape.`;
+      const content = appendSchemaHint(basePrompt, schema);
       const res = await this.client.messages.create({
         model, max_tokens: maxTokens, system,
         messages: [{ role: "user", content }],

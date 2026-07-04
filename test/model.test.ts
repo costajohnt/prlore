@@ -72,6 +72,26 @@ test("extracts JSON when a string value contains a closing brace", async () => {
   expect(await p.complete({ prompt: "q", schema })).toEqual({ answer: "a}b" });
 });
 
+test("appends the schema hint to the prompt on the first attempt", async () => {
+  const { client, create } = fakeClient(['{"answer":"yes"}']);
+  const p = new AnthropicProvider({ maxBudgetUsd: 10 }, client as never);
+  await p.complete({ prompt: "q", schema });
+  const firstPrompt = create.mock.calls[0]![0].messages[0].content as string;
+  expect(firstPrompt).toContain("q");
+  expect(firstPrompt).toContain("JSON Schema");
+  expect(firstPrompt).toContain("answer");
+});
+
+test("appends the schema hint to the prompt on the retry attempt too", async () => {
+  const { client, create } = fakeClient(['{"wrong":true}', '{"answer":"fixed"}']);
+  const p = new AnthropicProvider({ maxBudgetUsd: 10 }, client as never);
+  await p.complete({ prompt: "q", schema });
+  const retryPrompt = create.mock.calls[1]![0].messages[0].content as string;
+  expect(retryPrompt).toContain("invalid");
+  expect(retryPrompt).toContain("JSON Schema");
+  expect(retryPrompt).toContain("answer");
+});
+
 test("constructor throws for a model with no price data", () => {
   const { client } = fakeClient(['{"answer":"a"}']);
   expect(

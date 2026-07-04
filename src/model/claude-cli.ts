@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { extractJson } from "./anthropic.js";
 import { BudgetExceededError, type CompleteOptions, type ModelProvider } from "./provider.js";
+import { appendSchemaHint } from "./schema-hint.js";
 
 const DEFAULT_TIMEOUT_MS = 5 * 60_000;
 const STDERR_EXCERPT_LEN = 300;
@@ -52,10 +53,11 @@ export class ClaudeCliProvider implements ModelProvider {
         throw new BudgetExceededError(this.spent, this.opts.maxBudgetUsd);
       }
 
-      const input =
+      const baseInput =
         attempt === 0
           ? prompt
           : `${prompt}\n\nYour previous reply was invalid: ${lastError}\nReply with ONLY valid JSON matching the requested shape.`;
+      const input = appendSchemaHint(baseInput, schema);
 
       const args = ["-p", "--output-format", "json"];
       if (this.opts.model) args.push("--model", this.opts.model);

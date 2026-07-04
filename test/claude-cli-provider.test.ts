@@ -33,7 +33,32 @@ test("complete returns schema-validated JSON and books cost", async () => {
   expect(args).toContain("-p");
   expect(args).toContain("--output-format");
   expect(args).toContain("json");
-  expect(input).toBe("q");
+  // stdin now carries the prompt plus an appended schema-hint block, not the
+  // bare prompt string — see the schema-hint tests below for that behavior.
+  expect(input).toContain("q");
+});
+
+test("appends the schema hint to stdin on the first attempt", async () => {
+  const run = fakeRunCli([{ result: '{"answer":"yes"}', total_cost_usd: 0.01 }]);
+  const p = new ClaudeCliProvider({ maxBudgetUsd: 10 }, run as unknown as RunCli);
+  await p.complete({ prompt: "q", schema });
+  const [, input] = run.mock.calls[0]!;
+  expect(input).toContain("q");
+  expect(input).toContain("JSON Schema");
+  expect(input).toContain("answer");
+});
+
+test("appends the schema hint to stdin on the retry attempt too", async () => {
+  const run = fakeRunCli([
+    { result: "not json at all", total_cost_usd: 0.01 },
+    { result: '{"answer":"fixed"}', total_cost_usd: 0.01 },
+  ]);
+  const p = new ClaudeCliProvider({ maxBudgetUsd: 10 }, run as unknown as RunCli);
+  await p.complete({ prompt: "q", schema });
+  const [, retryInput] = run.mock.calls[1]!;
+  expect(retryInput).toContain("invalid");
+  expect(retryInput).toContain("JSON Schema");
+  expect(retryInput).toContain("answer");
 });
 
 test("passes --model and --system-prompt flags when provided", async () => {
