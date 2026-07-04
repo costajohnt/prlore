@@ -298,6 +298,86 @@ test("--budget with a non-numeric value -> usage error, exit 2", async () => {
   expect(err()).toMatch(/--budget/);
 });
 
+// ---- --max-rules (v0.3 Task 4) ------------------------------------------------
+
+test("--max-rules threads a positive integer into config.output.maxRules", async () => {
+  const repoPath = await tmpRepo();
+  const manager = new ScriptedJobManager([readyStatus()], { draft: mkDraft([]), provenance: mkProvenance([mkRule()]), contested: [] });
+  const { stdout, stderr } = streams();
+
+  const code = await runMineCli(baseArgv("octo/repo", repoPath, ["--max-rules", "5"]), {
+    makeDeps,
+    manager,
+    stdout,
+    stderr,
+    confirm: async () => true,
+    pollIntervalMs: 0,
+  });
+
+  expect(code).toBe(0);
+  expect(manager.startCalls[0]!.config.output.maxRules).toBe(5);
+});
+
+test("no --max-rules -> config.output.maxRules falls through to the schema default (60)", async () => {
+  const repoPath = await tmpRepo();
+  const manager = new ScriptedJobManager([readyStatus()], { draft: mkDraft([]), provenance: mkProvenance([mkRule()]), contested: [] });
+  const { stdout, stderr } = streams();
+
+  const code = await runMineCli(baseArgv("octo/repo", repoPath), {
+    makeDeps,
+    manager,
+    stdout,
+    stderr,
+    confirm: async () => true,
+    pollIntervalMs: 0,
+  });
+
+  expect(code).toBe(0);
+  expect(manager.startCalls[0]!.config.output.maxRules).toBe(60);
+});
+
+test("--max-rules 0 -> usage error, exit 2 (positive int only, no zero-means-uncapped)", async () => {
+  const { stdout, stderr, err } = streams();
+  const code = await runMineCli(["octo/repo", "--intent", "x", "--max-rules", "0"], {
+    makeDeps,
+    manager: new ScriptedJobManager([readyStatus()]),
+    stdout,
+    stderr,
+    confirm: async () => true,
+    pollIntervalMs: 0,
+  });
+  expect(code).toBe(2);
+  expect(err()).toMatch(/--max-rules/);
+});
+
+test("--max-rules with a non-integer value -> usage error, exit 2", async () => {
+  const { stdout, stderr, err } = streams();
+  const code = await runMineCli(["octo/repo", "--intent", "x", "--max-rules", "3.5"], {
+    makeDeps,
+    manager: new ScriptedJobManager([readyStatus()]),
+    stdout,
+    stderr,
+    confirm: async () => true,
+    pollIntervalMs: 0,
+  });
+  expect(code).toBe(2);
+  expect(err()).toMatch(/--max-rules/);
+});
+
+test("--max-rules with a negative value -> usage error, exit 2", async () => {
+  const { stdout, stderr, err } = streams();
+  const code = await runMineCli(["octo/repo", "--intent", "x", "--max-rules", "-1"], {
+    makeDeps,
+    manager: new ScriptedJobManager([readyStatus()]),
+    stdout,
+    stderr,
+    confirm: async () => true,
+    pollIntervalMs: 0,
+  });
+  expect(code).toBe(2);
+  expect(err()).toMatch(/--max-rules/);
+});
+
 // ---- happy flow: preview, confirm=true, write ---------------------------------
 
 test("happy flow: polls to ready, prints preview, writes after confirm=true, exit 0", async () => {

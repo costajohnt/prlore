@@ -47,6 +47,10 @@ usage: prlore mine <owner/repo> [options]
                              which model backend to use (default: auto)
   --repo-path <path>         local checkout to mine against (default: cwd)
   --target <file>            output file (default: AGENTS.md)
+  --max-rules <n>             cap on rules rendered in full detail; the rest
+                             render as compact one-liners in a trailing
+                             section (default: 60; must be a positive
+                             integer — pass a large number for "no cap")
   --yes                       skip the write confirmation prompt
   --dry-run                   preview only; never writes, even with --yes
 ```
@@ -210,3 +214,13 @@ script-built fixture git repo.
   draft exceeds 400 lines OR 24,000 bytes (~6k tokens), whichever trips
   first — a handful of very long rule lines can blow past a reasonable doc
   size while staying under the line-count check alone.
+- **Tiered rendering caps how many rules get full treatment.** Only the top
+  `output.maxRules` (default 60, by score — rules already arrive score-sorted)
+  render in full inside their planned sections. Anything beyond the cap still
+  ships, just compressed: one line each (`- statement _(citations)_`, no
+  rationale) in a single trailing `## Additional conventions (lower signal)`
+  section, before the contested section. Nothing is dropped from the doc by
+  this — `provenance.rules` still carries full records for every rule,
+  tagged with `renderedTier: "full" | "compact"`. Set `--max-rules` (CLI) or
+  `output.maxRules` (MCP config) to change the cutoff; it must be a positive
+  integer, so "no cap" means passing a large number, not `0`.

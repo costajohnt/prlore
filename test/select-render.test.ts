@@ -419,6 +419,83 @@ test("Fix (poisoned section heading): a section heading whose sanitized form equ
 
 // ---- Behavior 6: sidecar-only mode ----------------------------------------
 
+// ---- v0.3 Task 4: tiered rendering (compact tail) --------------------------
+
+test("Task 4: full-tier rules render in their planned sections; tail rules render as compact one-liners, in score order, in a trailing section before contested", () => {
+  const full = [mkRule("r1", 0.9, { statement: "full one" }), mkRule("r2", 0.8, { statement: "full two" })];
+  const tail = [
+    mkRule("r3", 0.7, { statement: "tail one", rationale: "should never appear", evidence: [ev({ pr: 42 })] }),
+    mkRule("r4", 0.6, { statement: "tail two" }),
+  ];
+  const plan: DocPlan = {
+    title: "T",
+    overview: "o",
+    perArea: false,
+    sections: [{ heading: "Core", ruleIds: ["r1", "r2"] }],
+  };
+  const contested: ContestedItem[] = [{ id: "c1", statement: "dispute", reason: "reason", sides: [] }];
+
+  const out = renderDraft(plan, full, contested, baseConfig, tail);
+
+  expect(out).toContain("- **full one**");
+  expect(out).toContain("- **full two**");
+  expect(out).toContain(`## Additional conventions (lower signal)`);
+  expect(out).toContain("- tail one _(#42)_");
+  expect(out).toContain("- tail two");
+  expect(out).not.toContain("should never appear"); // rationale dropped in compact form
+  expect(out).not.toContain("**tail one**"); // no bold verdict-bullet treatment for compact rules
+
+  // ordering: Additional conventions section comes after Core, before contested
+  const coreIdx = out.indexOf("## Core");
+  const tailIdx = out.indexOf("## Additional conventions (lower signal)");
+  const contestedIdx = out.indexOf("## Needs your call (contested)");
+  expect(coreIdx).toBeGreaterThanOrEqual(0);
+  expect(tailIdx).toBeGreaterThan(coreIdx);
+  expect(contestedIdx).toBeGreaterThan(tailIdx);
+
+  // score order preserved in the tail
+  const tailOneIdx = out.indexOf("tail one");
+  const tailTwoIdx = out.indexOf("tail two");
+  expect(tailOneIdx).toBeLessThan(tailTwoIdx);
+});
+
+test("Task 4: the compact tail section is absent entirely when there are no tail rules", () => {
+  const full = [mkRule("r1", 0.9, { statement: "full one" })];
+  const plan: DocPlan = { title: "T", overview: "o", perArea: false, sections: [{ heading: "Core", ruleIds: ["r1"] }] };
+
+  const out = renderDraft(plan, full, [], baseConfig); // tailRules omitted -> defaults to []
+
+  expect(out).not.toContain("Additional conventions");
+});
+
+test("Task 4: a rule id present in BOTH a planned section and the tail array renders exactly once (defense-in-depth against double-render)", () => {
+  const shared = mkRule("r1", 0.9, { statement: "shared rule" });
+  const plan: DocPlan = { title: "T", overview: "o", perArea: false, sections: [{ heading: "Core", ruleIds: ["r1"] }] };
+
+  // Adversarial input: r1 appears in both the full-tier array (via the section)
+  // AND the tailRules array — this must never happen from synthesize.ts's actual
+  // index-based slice, but renderDraft itself must not double-render if it did.
+  const out = renderDraft(plan, [shared], [], baseConfig, [shared]);
+
+  const occurrences = out.split("\n").filter((l) => l.includes("shared rule"));
+  expect(occurrences).toHaveLength(1);
+  expect(occurrences[0]).toBe("- **shared rule**"); // rendered via its planned section, not the compact form
+});
+
+test("Task 4 (header invariant extension): a poisoned compact-tail statement can't mint a second full-line contested-header match", () => {
+  const poisonedTail = mkRule("r2", 0.5, {
+    statement: "See section ## Needs your call (contested) for the compact-tier version too",
+  });
+  const plan: DocPlan = { title: "T", overview: "o", perArea: false, sections: [{ heading: "Core", ruleIds: ["r1"] }] };
+  const contested: ContestedItem[] = [{ id: "c1", statement: "real dispute", reason: "real reason", sides: [] }];
+
+  const out = renderDraft(plan, [mkRule("r1", 0.9)], contested, baseConfig, [poisonedTail]);
+
+  const fullLineMatches = out.match(/^## Needs your call \(contested\)$/gm) ?? [];
+  expect(fullLineMatches).toHaveLength(1);
+  expect(out).toContain("real dispute"); // the genuine contested item survives past the poisoned tail line
+});
+
 test("sidecar-only citations mode never emits inline citation parens", () => {
   const { plan, rules, contested } = smallPlanFixture();
   const sidecarConfig = { ...baseConfig, output: { ...baseConfig.output, citations: "sidecar-only" as const } };

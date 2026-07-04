@@ -8,7 +8,7 @@ test("MineConfig applies spec defaults from minimal input", () => {
   const c = MineConfigSchema.parse({ repo: "owner/name", intent: "onboard an AI agent" });
   expect(c.baseUrl).toBe("https://api.github.com");
   expect(c.timeRange.maxPrs).toBe(1500);
-  expect(c.output).toEqual({ target: "AGENTS.md", layout: "auto", citations: "inline-light" });
+  expect(c.output).toEqual({ target: "AGENTS.md", layout: "auto", citations: "inline-light", maxRules: 60 });
   expect(c.model.provider).toBe("auto");
   expect(c.model.maxBudgetUsd).toBe(10);
 });
@@ -75,4 +75,20 @@ test("MineConfig accepts author logins", () => {
 
 test("MineConfig rejects an empty-string author entry", () => {
   expect(() => MineConfigSchema.parse({ repo: "owner/name", intent: "x", authors: [""] })).toThrow();
+});
+
+// ---- v0.3 Task 4: output.maxRules -------------------------------------------
+
+test("MineConfig accepts a custom output.maxRules", () => {
+  const c = MineConfigSchema.parse({ repo: "owner/name", intent: "x", output: { maxRules: 5 } });
+  expect(c.output.maxRules).toBe(5);
+});
+
+test("MineConfig rejects a zero or negative output.maxRules", () => {
+  expect(() => MineConfigSchema.parse({ repo: "owner/name", intent: "x", output: { maxRules: 0 } })).toThrow();
+  expect(() => MineConfigSchema.parse({ repo: "owner/name", intent: "x", output: { maxRules: -1 } })).toThrow();
+});
+
+test("MineConfig rejects a non-integer output.maxRules", () => {
+  expect(() => MineConfigSchema.parse({ repo: "owner/name", intent: "x", output: { maxRules: 1.5 } })).toThrow();
 });

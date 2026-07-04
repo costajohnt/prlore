@@ -55,6 +55,10 @@ export const USAGE = `usage: prlore mine <owner/repo> [options]
                              which model backend to use (default: auto)
   --repo-path <path>         local checkout to mine against (default: cwd)
   --target <file>            output file (default: AGENTS.md)
+  --max-rules <n>             cap on rules rendered in full detail; the rest
+                             render as compact one-liners in a trailing
+                             section (default: 60; must be a positive
+                             integer — pass a large number for "no cap")
   --yes                       skip the write confirmation prompt
   --dry-run                   preview only; never writes, even with --yes
 `;
@@ -88,6 +92,7 @@ function parseMineArgs(argv: string[], now: () => number): ParsedMineArgs {
         provider: { type: "string" },
         "repo-path": { type: "string" },
         target: { type: "string" },
+        "max-rules": { type: "string" },
         yes: { type: "boolean", default: false },
         "dry-run": { type: "boolean", default: false },
       },
@@ -135,6 +140,14 @@ function parseMineArgs(argv: string[], now: () => number): ParsedMineArgs {
   const target = (values.target as string | undefined) ?? "AGENTS.md";
   const authors = (values.author as string[] | undefined) ?? [];
 
+  let maxRules: number | undefined;
+  if (values["max-rules"] !== undefined) {
+    maxRules = Number(values["max-rules"]);
+    if (!Number.isInteger(maxRules) || maxRules <= 0) {
+      throw new CliUsageError(`--max-rules must be a positive integer, got "${values["max-rules"] as string}"`);
+    }
+  }
+
   // --author changes the default *intent* (not just the config's authors
   // filter) when --intent isn't given explicitly: mining only your own PRs
   // is normally the "lessons from maintainer feedback" use case, which reads
@@ -151,7 +164,7 @@ function parseMineArgs(argv: string[], now: () => number): ParsedMineArgs {
       intent,
       authors,
       ...(since !== undefined ? { timeRange: { since } } : {}),
-      output: { target },
+      output: { target, ...(maxRules !== undefined ? { maxRules } : {}) },
       model: {
         ...(provider !== undefined ? { provider } : {}),
         ...(values.model !== undefined ? { model: values.model } : {}),

@@ -20,6 +20,12 @@ export const MineConfigSchema = z.object({
       target: z.string().default("AGENTS.md"),
       layout: z.enum(["single", "per-area", "auto"]).default("auto"),
       citations: z.enum(["inline-light", "sidecar-only"]).default("inline-light"),
+      // v0.3 Task 4: the top maxRules (by score, which is already the sort order
+      // rules arrive in) render fully in their planned sections; anything beyond
+      // the cap renders as a compact one-liner in a single trailing section
+      // instead of being silently dropped. Positive-int only — "no cap" means
+      // passing a large value, not 0 (see src/cli.ts's --max-rules validation).
+      maxRules: z.number().int().positive().default(60),
     })
     .prefault({}),
   model: z

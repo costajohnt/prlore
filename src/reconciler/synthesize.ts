@@ -179,13 +179,30 @@ export async function synthesize(
   }
   rules.sort((a, b) => b.score - a.score);
 
-  const plan = await planDoc(rules, config.intent, patterns.areas, provider);
-  const draft = renderDraft(plan, rules, contested, config);
+  // v0.3 Task 4: tiered rendering. `rules` is already score-desc sorted, so the
+  // top output.maxRules is a plain index slice — a structural partition, not a
+  // filter, which is what keeps "a rule is either in a section or the tail,
+  // never both" true by construction rather than by a runtime check. planDoc
+  // (and therefore every planned section) only ever sees the full-tier slice:
+  // feeding it every rule and demoting the overflow afterward would let a
+  // section legitimately reference a rule this pass then wants in the compact
+  // tail, so the cut has to happen BEFORE planning, not after. The tail bypasses
+  // planning entirely and renders as compact one-liners (see render.ts).
+  const maxRules = config.output.maxRules;
+  const tiered: RuleRecord[] = rules.map((r, i) => ({
+    ...r,
+    renderedTier: i < maxRules ? "full" : "compact",
+  }));
+  const fullRules = tiered.filter((r) => r.renderedTier === "full");
+  const tailRules = tiered.filter((r) => r.renderedTier === "compact");
+
+  const plan = await planDoc(fullRules, config.intent, patterns.areas, provider);
+  const draft = renderDraft(plan, fullRules, contested, config, tailRules);
 
   const provenance = ProvenanceSchema.parse({
     generatedAt: new Date(now()).toISOString(),
     intent: config.intent,
-    rules,
+    rules: tiered,
     dropped,
     contested,
   });

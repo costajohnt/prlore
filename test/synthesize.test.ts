@@ -796,6 +796,83 @@ test("Task 3: same norm filed under two different categories merges into one rul
   expect(calls).toBe(5);
 });
 
+// ---- v0.3 Task 4: tiered rendering (maxRules + compact tail) ----------------
+//
+// Reuses Test 1's exact fixture (candidates/prs/patterns/scriptedProvider) so
+// the surviving rules and their scores are already pinned by that test:
+// code-0 (synthetic, score 0.5) > "1" (newApi, score ~0.472) > "2" (changelog,
+// score 0.3). output.maxRules: 2 puts code-0 and "1" in the full tier and "2"
+// alone in the compact tail — the lowest-scored survivor, not an arbitrary one.
+
+test("Task 4: output.maxRules caps full-detail rendering; the seam feeds planDoc only the full tier, so an overflow section reference is dropped and the overflow rule renders compact instead", async () => {
+  const repo = await buildFixtureRepo();
+  const stateDir = await mkdtemp(join(tmpdir(), "prlore-synth-maxrules-"));
+  await saveCheckpoint(stateDir, mkCheckpoint("analyzing"));
+  const { provider, callCount } = scriptedProvider(); // defaultPlan puts "2" in a "Process" section
+  const candidates = mkCandidates(); // c1 OWNER evidence from 2023-06-01: stale, probe-demoted, dropped
+  const cappedConfig = MineConfigSchema.parse({
+    repo: "acme/widgets",
+    intent: "help new contributors",
+    output: { maxRules: 2 },
+  });
+
+  const { draft, provenance } = await synthesize(cappedConfig, patterns, candidates, prs, {
+    provider,
+    repoPath: repo,
+    now,
+    stateDir,
+  });
+
+  // Full tier: rendered inside its planned "Core" section, in full form.
+  expect(draft).toContain("## Core");
+  expect(draft).toContain("- **Use newApi for new modules**");
+  expect(draft).toContain("- **Prefer composition over inheritance**");
+
+  // defaultPlan's "Process" section named ONLY the overflow rule ("2") — planDoc
+  // never saw it (fed only the top-2 slice), so enforce() dropped it as an
+  // unknown id and the now-empty section vanished rather than rendering "2" in
+  // full. This is the seam: planDoc/select receives only the top-maxRules rules.
+  expect(draft).not.toContain("## Process");
+
+  // Overflow tier: compact tail, no rationale/bold treatment, own trailing section.
+  expect(draft).toContain("## Additional conventions (lower signal)");
+  expect(draft).toContain("- Update the changelog on every release");
+  expect(draft).not.toContain("**Update the changelog on every release**");
+
+  // Ordering: tail section after the planned sections.
+  expect(draft.indexOf("## Additional conventions (lower signal)")).toBeGreaterThan(draft.indexOf("## Core"));
+
+  // provenance.rules is untouched in size/shape by tiering (still full records for
+  // every non-dropped, non-contested rule) — only renderedTier is added.
+  expect(new Set(provenance.rules.map((r) => r.id))).toEqual(new Set(["1", "2", "code-0"]));
+  const byId = new Map(provenance.rules.map((r) => [r.id, r]));
+  expect(byId.get("code-0")!.renderedTier).toBe("full");
+  expect(byId.get("1")!.renderedTier).toBe("full");
+  expect(byId.get("2")!.renderedTier).toBe("compact");
+
+  // A rule never appears in BOTH a planned section's ruleIds and the tail —
+  // structural, not just a rendering accident: the id sets are disjoint because
+  // they're built from disjoint index slices of the same sorted array.
+  const fullTierIds = new Set(provenance.rules.filter((r) => r.renderedTier === "full").map((r) => r.id));
+  const compactTierIds = new Set(provenance.rules.filter((r) => r.renderedTier === "compact").map((r) => r.id));
+  for (const id of fullTierIds) expect(compactTierIds.has(id)).toBe(false);
+
+  // No extra provider calls: maxRules only changes which rules planDoc/render see,
+  // not how many times the provider is invoked (still buckets + reconcile + dedup + plan).
+  expect(callCount()).toBe(6);
+});
+
+test("Task 4: no tail section at all when every surviving rule fits under output.maxRules (the default, 60)", async () => {
+  const repo = await buildFixtureRepo();
+  const { provider } = scriptedProvider();
+  const candidates = mkCandidates();
+
+  const { draft, provenance } = await synthesize(baseConfig, patterns, candidates, prs, { provider, repoPath: repo, now });
+
+  expect(draft).not.toContain("Additional conventions");
+  expect(provenance.rules.every((r) => r.renderedTier === "full")).toBe(true);
+});
+
 test("Task 3: a proposal naming a contested id is rejected (both sides survive untouched)", async () => {
   const repo = await buildFixtureRepo();
   const { provider } = scriptedProvider();

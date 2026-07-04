@@ -56,6 +56,13 @@ export const RuleRecordSchema = z.object({
   // into this one. Absent on every record that wasn't a merge target, including all
   // 0.2.x sidecars.
   mergedFrom: z.array(z.string()).optional(),
+  // Additive, optional (v0.3 Task 4): which tier of the rendered doc this rule
+  // landed in — "full" inside its planned section, "compact" as a one-liner in
+  // the trailing "Additional conventions (lower signal)" section. Set on every
+  // non-dropped, non-contested record once output.maxRules tiering runs (see
+  // synthesize.ts); absent on 0.2.x sidecars and on dropped/contested records,
+  // which were never tiered at all.
+  renderedTier: z.enum(["full", "compact"]).optional(),
 });
 export type RuleRecord = z.infer<typeof RuleRecordSchema>;
 
