@@ -67,8 +67,18 @@ function estimateLines(sections: DocPlanSection[]): number {
   return HEADER_LINES + sections.reduce((sum, s) => sum + SECTION_OVERHEAD_LINES + s.ruleIds.length, 0);
 }
 
-function trimToBudget(sections: DocPlanSection[], ruleById: Map<string, RuleRecord>): DocPlanSection[] {
+// Returns the surviving sections PLUS the ids it had to remove to hit budget —
+// callers must not let those ids vanish silently (see the "Fix" test in
+// synthesize.test.ts): a rule cut here is genuinely known-good content, just
+// too much of it for one document, so it belongs in the compact tail rather
+// than disappearing from the rendered doc while its provenance still claims
+// full-tier treatment.
+function trimToBudget(
+  sections: DocPlanSection[],
+  ruleById: Map<string, RuleRecord>,
+): { sections: DocPlanSection[]; trimmedIds: string[] } {
   let current = sections.map((s) => ({ heading: s.heading, ruleIds: [...s.ruleIds] }));
+  const trimmedIds: string[] = [];
 
   while (estimateLines(current) > LINE_BUDGET) {
     let largestIndex = -1;
@@ -92,22 +102,32 @@ function trimToBudget(sections: DocPlanSection[], ruleById: Map<string, RuleReco
         lowestIndex = i;
       }
     }
+    trimmedIds.push(section.ruleIds[lowestIndex]!);
     section.ruleIds.splice(lowestIndex, 1);
     current = current.filter((s) => s.ruleIds.length > 0);
   }
 
-  return current;
+  return { sections: current, trimmedIds };
 }
 
-function enforce(draft: DocPlan, rules: RuleRecord[]): DocPlan {
+export interface PlanResult {
+  plan: DocPlan;
+  // Ids trimToBudget removed from every section to fit the 400-line cap. The
+  // caller (synthesize.ts) owns routing these into the compact tail and
+  // correcting their renderedTier — enforce() only knows about sections, not
+  // the tiering concept.
+  trimmedIds: string[];
+}
+
+function enforce(draft: DocPlan, rules: RuleRecord[]): PlanResult {
   const ruleById = new Map(rules.map((r) => [r.id, r]));
   const knownIds = new Set(rules.map((r) => r.id));
 
   const { sections: deduped, seen } = dropUnknownAndDuplicates(draft.sections, knownIds);
   const rescued = rescueOmitted(deduped, rules, seen);
-  const trimmed = trimToBudget(rescued, ruleById);
+  const { sections: trimmed, trimmedIds } = trimToBudget(rescued, ruleById);
 
-  return { ...draft, sections: trimmed };
+  return { plan: { ...draft, sections: trimmed }, trimmedIds };
 }
 
 // Deterministic degradation, mirroring cluster/reconcile: if the model is unavailable at this
@@ -127,7 +147,7 @@ export async function planDoc(
   intent: string,
   areas: PatternsModel["areas"],
   provider: ModelProvider,
-): Promise<DocPlan> {
+): Promise<PlanResult> {
   let draft: DocPlan;
   try {
     draft = await provider.complete({

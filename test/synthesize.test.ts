@@ -873,6 +873,100 @@ test("Task 4: no tail section at all when every surviving rule fits under output
   expect(provenance.rules.every((r) => r.renderedTier === "full")).toBe(true);
 });
 
+// ---- Fix: trimToBudget re-arming with a large --max-rules must not lie -----
+//
+// The README tells users to pass a large --max-rules for "no cap". With maxRules
+// set well above the surviving rule count, every rule tiers "full" BEFORE planDoc
+// runs (see the seam comment above). If the plan then crams all of them into one
+// section, select.ts's enforce()/trimToBudget silently removes the lowest-score
+// overflow to stay under its own 400-line budget -- a wholly separate cap from
+// output.maxRules. Pre-fix, those trimmed rules keep provenance.renderedTier ===
+// "full" while rendering in NEITHER the planned section NOR the compact tail
+// (tailRules was computed before enforce() ran, so it never gets them either):
+// the tier field lies about where a rule ended up. This test constructs exactly
+// that re-armed scenario -- 450 single-PR-OWNER rules, one plan section naming
+// all of them (estimate = 6 + 3 + 450 = 459 > 400) -- and asserts every surviving
+// rule actually renders where its own renderedTier claims it does.
+
+test("Fix: a trimToBudget-dropped rule is routed into the compact tail, not left claiming renderedTier \"full\" while rendering nowhere", async () => {
+  const repo = await buildFixtureRepo();
+  const N = 450;
+
+  const trimCandidates: CandidateLearning[] = [];
+  const trimPrs: NormalizedPr[] = [];
+  for (let i = 0; i < N; i++) {
+    const quote = `rule number ${i} requires consistent handling across the whole codebase`;
+    trimCandidates.push({
+      statement: `Follow convention number ${i} everywhere`,
+      category: "style",
+      polarity: "prescriptive",
+      scope: [],
+      evidence: [{ pr: i + 1, author: "owner1", association: "OWNER", quote, createdAt: "2026-06-20T00:00:00Z" }],
+    });
+    trimPrs.push({
+      number: i + 1, title: `PR ${i + 1}`, body: `Review note. ${quote}. Thanks!`,
+      author: "owner1", authorAssociation: "OWNER", state: "MERGED", mergedAt: null,
+      updatedAt: "2026-06-20T00:00:00Z", labels: [], files: [], threads: [], reviews: [], comments: [],
+    });
+  }
+
+  const trimPatterns: PatternsModel = { areas: [], patterns: [], migrations: [], meta: { languages: [], frameworks: [], tooling: [] } };
+
+  const trimProvider: ModelProvider = {
+    spentUsd: () => 0,
+    async complete<T>({ prompt }: CompleteOptions<T>): Promise<T> {
+      if (prompt.startsWith("intent:")) {
+        const ids = Array.from({ length: N }, (_, i) => String(i));
+        return { title: "T", overview: "o", perArea: false, sections: [{ heading: "Everything", ruleIds: ids }] } as T;
+      }
+      if (prompt.startsWith("meta:")) {
+        const proposals = Array.from({ length: N }, (_, i) => ({ clusterId: i, proposedVerdict: "corroborated" as const }));
+        return { proposals } as T;
+      }
+      if (prompt.startsWith("dedupe:")) return { mergeSets: [] } as T;
+      // cluster call: one singleton group per candidate line, same default scripted shape.
+      const lines = prompt.split("\n").filter((l) => /^\[\d+\]/.test(l));
+      const groups = lines.map((line, i) => ({
+        memberIndexes: [i],
+        canonicalStatement: line.replace(/^\[\d+\]\s*/, "").replace(/ \((?:prescriptive|proscriptive)\)$/, ""),
+      }));
+      return { groups } as T;
+    },
+  };
+
+  // "no cap" style value: far above the surviving rule count, so every rule
+  // tiers "full" before planDoc/enforce ever runs.
+  const noCapConfig = MineConfigSchema.parse({
+    repo: "acme/widgets",
+    intent: "help new contributors",
+    output: { maxRules: 1000 },
+  });
+
+  const { draft, provenance } = await synthesize(noCapConfig, trimPatterns, trimCandidates, trimPrs, {
+    provider: trimProvider,
+    repoPath: repo,
+    now,
+  });
+
+  expect(provenance.rules).toHaveLength(N); // sanity: all 450 clear scoring, none dropped/contested
+
+  // Sanity: the budget trim actually fired for this scenario (not a no-op test) --
+  // some of the 450 rules must have been demoted out of the "full" tier.
+  const compactTierRules = provenance.rules.filter((r) => r.renderedTier === "compact");
+  expect(compactTierRules.length).toBeGreaterThan(0);
+  expect(compactTierRules.length).toBeLessThan(N);
+
+  // Every surviving rule must render exactly where its own renderedTier claims:
+  // "full" inside its planned section (bold bullet), "compact" as a tail one-liner.
+  for (const rule of provenance.rules) {
+    if (rule.renderedTier === "full") {
+      expect(draft).toContain(`**${rule.statement}**`);
+    } else {
+      expect(draft).toContain(`- ${rule.statement}`);
+    }
+  }
+});
+
 test("Task 3: a proposal naming a contested id is rejected (both sides survive untouched)", async () => {
   const repo = await buildFixtureRepo();
   const { provider } = scriptedProvider();

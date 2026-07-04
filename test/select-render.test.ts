@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { finalizeDraft } from "../src/emitter/finalize.js";
 import { BudgetExceededError, type CompleteOptions, type ModelProvider } from "../src/model/provider.js";
 import { planDoc, type DocPlan } from "../src/reconciler/select.js";
 import { renderDraft } from "../src/reconciler/render.js";
@@ -65,7 +66,7 @@ test("unknown ruleIds are dropped and a duplicate id keeps only its first occurr
   };
   const { p } = fakeProvider(draft);
 
-  const plan = await planDoc(rules, "help new contributors", emptyAreas, p);
+  const { plan } = await planDoc(rules, "help new contributors", emptyAreas, p);
 
   expect(plan.sections).toHaveLength(1); // "Extra" disappears once its only id is stripped as a dup
   expect(plan.sections[0]!.heading).toBe("Core");
@@ -87,7 +88,7 @@ test("an omitted rule with score >= 0.5 is rescued into a trailing Other convent
   };
   const { p } = fakeProvider(draft);
 
-  const plan = await planDoc([r1, r2, r3], "intent", emptyAreas, p);
+  const { plan } = await planDoc([r1, r2, r3], "intent", emptyAreas, p);
 
   const other = plan.sections.find((s) => s.heading === "Other conventions");
   expect(other).toBeDefined();
@@ -110,7 +111,7 @@ test("line-budget trim keeps estimate <= 400 lines by dropping the lowest-score 
   };
   const { p } = fakeProvider(draft);
 
-  const plan = await planDoc(rules, "intent", emptyAreas, p);
+  const { plan, trimmedIds } = await planDoc(rules, "intent", emptyAreas, p);
 
   const survivingIds = new Set(plan.sections.flatMap((s) => s.ruleIds));
   const estimate = 6 + plan.sections.reduce((sum, s) => sum + 3 + s.ruleIds.length, 0);
@@ -121,6 +122,12 @@ test("line-budget trim keeps estimate <= 400 lines by dropping the lowest-score 
   const trimmedScores = rules.filter((r) => !survivingIds.has(r.id)).map((r) => r.score);
   expect(trimmedScores.length).toBeGreaterThan(0); // sanity: something was actually trimmed
   expect(Math.min(...survivingScores)).toBeGreaterThan(Math.max(...trimmedScores)); // highest scores kept
+
+  // trimmedIds surfaces exactly the ids that dropped out of every section — the
+  // seam synthesize.ts uses to route them into the compact tail instead of
+  // letting them vanish while still claiming renderedTier "full".
+  expect(new Set(trimmedIds)).toEqual(new Set(rules.filter((r) => !survivingIds.has(r.id)).map((r) => r.id)));
+  expect(trimmedIds.every((id) => !survivingIds.has(id))).toBe(true);
 });
 
 // ---- Behavior 3b: provider-throw fallback ---------------------------------
@@ -137,7 +144,7 @@ test("provider throw: planDoc degrades to a deterministic score-desc plan that s
     },
   };
 
-  const plan = await planDoc(rules, "intent", emptyAreas, throwing);
+  const { plan } = await planDoc(rules, "intent", emptyAreas, throwing);
 
   expect(plan.title).toBe("Project conventions");
   expect(plan.perArea).toBe(false);
@@ -494,6 +501,38 @@ test("Task 4 (header invariant extension): a poisoned compact-tail statement can
   const fullLineMatches = out.match(/^## Needs your call \(contested\)$/gm) ?? [];
   expect(fullLineMatches).toHaveLength(1);
   expect(out).toContain("real dispute"); // the genuine contested item survives past the poisoned tail line
+});
+
+// ---- Fix (composed finalize): tail survives the write strip -----------------
+//
+// finalizeDraft (src/emitter/finalize.ts) only ever gets exercised in the test
+// suite composed with a planned-sections + contested draft (server-tools.test.ts,
+// cli.test.ts) or with ordering/poisoned-header edge cases (above). Nothing pins
+// the cheap, un-poisoned end-to-end case: a real render.ts draft carrying a
+// planned section AND a compact tail AND a contested section, run through the
+// actual finalizeDraft — the tail must survive the contested-section strip (it
+// renders BEFORE the contested header, so a correct line-anchored cut leaves it
+// untouched), the contested section must be gone, and the planned section must
+// be untouched.
+
+test("Fix: finalizeDraft on a composed draft (planned section + compact tail + contested) keeps the tail, drops contested, leaves sections intact", () => {
+  const full = [mkRule("r1", 0.9, { statement: "full rule one" })];
+  const tail = [mkRule("r2", 0.5, { statement: "tail rule one" })];
+  const plan: DocPlan = { title: "T", overview: "o", perArea: false, sections: [{ heading: "Core", ruleIds: ["r1"] }] };
+  const contested: ContestedItem[] = [{ id: "c1", statement: "disputed thing", reason: "conflicting guidance", sides: [] }];
+
+  const draft = renderDraft(plan, full, contested, baseConfig, tail);
+  const finalized = finalizeDraft(draft, []);
+
+  // planned section intact
+  expect(finalized).toContain("## Core");
+  expect(finalized).toContain("- **full rule one**");
+  // compact tail survives the write strip
+  expect(finalized).toContain("## Additional conventions (lower signal)");
+  expect(finalized).toContain("- tail rule one");
+  // contested section (header + item) is gone entirely
+  expect(finalized).not.toContain("Needs your call (contested)");
+  expect(finalized).not.toContain("disputed thing");
 });
 
 test("sidecar-only citations mode never emits inline citation parens", () => {

@@ -196,13 +196,30 @@ export async function synthesize(
   const fullRules = tiered.filter((r) => r.renderedTier === "full");
   const tailRules = tiered.filter((r) => r.renderedTier === "compact");
 
-  const plan = await planDoc(fullRules, config.intent, patterns.areas, provider);
-  const draft = renderDraft(plan, fullRules, contested, config, tailRules);
+  const { plan, trimmedIds } = await planDoc(fullRules, config.intent, patterns.areas, provider);
+
+  // Fix (renderedTier must match reality): select.ts's enforce()/trimToBudget can
+  // silently drop full-tier rules from every planned section to hit its own
+  // 400-line budget — a cap wholly separate from output.maxRules, and one a large
+  // "no cap" maxRules (per the README) re-arms on a big corpus. A rule cut there
+  // is still genuinely known-good content, so it's demoted to the compact tier
+  // here rather than left claiming renderedTier "full" while rendering nowhere.
+  // `tiered` stays globally score-desc sorted (built from the already-sorted
+  // `rules`), so filtering it for the new tier assignment keeps the tail in
+  // score order for free — no re-sort needed.
+  const trimmedIdSet = new Set(trimmedIds);
+  const finalTiered: RuleRecord[] = trimmedIdSet.size === 0
+    ? tiered
+    : tiered.map((r) => (trimmedIdSet.has(r.id) ? { ...r, renderedTier: "compact" } : r));
+  const finalFullRules = trimmedIdSet.size === 0 ? fullRules : finalTiered.filter((r) => r.renderedTier === "full");
+  const finalTailRules = trimmedIdSet.size === 0 ? tailRules : finalTiered.filter((r) => r.renderedTier === "compact");
+
+  const draft = renderDraft(plan, finalFullRules, contested, config, finalTailRules);
 
   const provenance = ProvenanceSchema.parse({
     generatedAt: new Date(now()).toISOString(),
     intent: config.intent,
-    rules: tiered,
+    rules: finalTiered,
     dropped,
     contested,
   });
