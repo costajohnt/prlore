@@ -153,10 +153,26 @@ export async function dedupeAcrossBuckets(
     const kept = pickKeptMember(members);
     const others = members.filter((m) => m !== kept);
     const evidence = mergeEvidence([kept, ...others]);
+    // Fix (cross-task seam: dedup x recurrence floor x synthetic rules): a synthetic
+    // code-only member (mergeCodeOnlyPatterns, no PR evidence, probe-verified) can
+    // lose pickKeptMember to a PR-evidenced member every time (evidence count is the
+    // primary sort key, and a synthetic member always has zero). The `...kept` spread
+    // below only carries the KEPT member's own syntheticScore, so a losing synthetic
+    // member's probe signal used to vanish outright — dropping both the recurrence-
+    // floor exemption (synthesize.ts checks `rule.syntheticScore === undefined`) and
+    // the confidence value itself. Carry the MAX syntheticScore across every member
+    // of the merge set forward onto the merged record, regardless of which member
+    // pickKeptMember chose. synthesize.ts's toRuleRecord takes
+    // max(syntheticScore, scoreRule(...)) for the final score, so a strong PR side
+    // can still outscore a weak probe once both are considered.
+    const syntheticScores = members
+      .map((m) => m.syntheticScore)
+      .filter((s): s is number => s !== undefined);
     const mergedRule: ReconciledRule = {
       ...kept,
       evidence,
       mergedFrom: [...(kept.mergedFrom ?? []), ...others.map((o) => o.id)],
+      ...(syntheticScores.length > 0 ? { syntheticScore: Math.max(...syntheticScores) } : {}),
     };
     mergedByKeptId.set(String(kept.id), mergedRule);
     for (const o of others) absorbedIds.add(String(o.id));

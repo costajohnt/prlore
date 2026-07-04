@@ -173,3 +173,36 @@ test("a synthetic code-only rule (no PR evidence) is eligible to merge like any 
   expect(merged).toHaveLength(1);
   expect(rules).toHaveLength(1);
 });
+
+test("a synthetic + PR-evidenced merge carries the synthetic's score forward onto the kept record, even though the PR side (more evidence) wins pickKeptMember", async () => {
+  const synthetic = rule("code-0", "Prefer composition over inheritance", { syntheticScore: 0.5 });
+  const prRule = rule(1, "Compose instead of inheriting", { evidence: [ev({ pr: 40, quote: "quote naming the pr side" })] });
+  const { p } = fakeProvider(() => ({ mergeSets: [{ ids: ["code-0", 1] }] }));
+
+  const { rules, merged } = await dedupeAcrossBuckets([synthetic, prRule], p);
+
+  expect(merged).toEqual([{ keptId: 1, absorbedIds: ["code-0"] }]); // PR side (1 evidence) beats synthetic (0)
+  const kept = rules.find((r) => r.id === 1)!;
+  expect(kept.syntheticScore).toBe(0.5); // carried forward despite the ...kept spread being the PR rule
+});
+
+test("a synthetic + PR-evidenced merge takes the MAX syntheticScore across all merged members, regardless of which member is kept", async () => {
+  // Force the synthetic side to win pickKeptMember (more evidence than the PR side)
+  // so the max-across-members logic is exercised on the "kept is already synthetic,
+  // but a HIGHER synthetic score sits on an absorbed member" branch too.
+  const keptSynthetic = rule("code-0", "Prefer composition over inheritance", {
+    syntheticScore: 0.4,
+    evidence: [ev({ pr: 50 }), ev({ pr: 51, quote: "second quote for the kept side" })],
+  });
+  const absorbedSynthetic = rule("code-1", "Favor composing over inheriting", {
+    syntheticScore: 0.6,
+    evidence: [ev({ pr: 52, quote: "single quote for the absorbed side" })],
+  });
+  const { p } = fakeProvider(() => ({ mergeSets: [{ ids: ["code-0", "code-1"] }] }));
+
+  const { rules, merged } = await dedupeAcrossBuckets([keptSynthetic, absorbedSynthetic], p);
+
+  expect(merged).toEqual([{ keptId: "code-0", absorbedIds: ["code-1"] }]);
+  const kept = rules.find((r) => r.id === "code-0")!;
+  expect(kept.syntheticScore).toBe(0.6); // max(0.4, 0.6), not just the kept member's own 0.4
+});

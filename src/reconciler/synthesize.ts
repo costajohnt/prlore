@@ -32,11 +32,22 @@ export interface SynthesizeDeps {
 }
 
 function toRuleRecord(rule: ReconciledRule, nowMs: number): RuleRecord {
-  // syntheticScore (mergeCodeOnlyPatterns) already bakes in its own confidence-derived
-  // value and bypasses scoreRule entirely, so it also bypasses the generality penalty —
-  // consistent with those rules never carrying a generality tag (probe-verified
-  // code-only patterns, not model-tagged clusters).
-  const score = rule.syntheticScore ?? scoreRule(rule.evidence, rule.verdict, nowMs, rule.generality);
+  // syntheticScore (mergeCodeOnlyPatterns) bakes in its own confidence-derived value.
+  // For a rule that was never touched by dedup.ts's cross-bucket merge, its evidence
+  // is always empty (mergeCodeOnlyPatterns never attaches any), so scoreRule(evidence:
+  // [], ...) is bounded well below syntheticScore's own floor (0.3) and the max below
+  // resolves to syntheticScore every time -- i.e. this is a no-op for that case and
+  // still "bypasses" the generality penalty exactly as before.
+  //
+  // Fix (cross-task seam: dedup x recurrence floor x synthetic rules): a rule that
+  // WAS merged (dedupe.ts carries syntheticScore forward onto the merged record, see
+  // that file) now has real PR evidence sitting alongside a probe-verified score. Take
+  // max(syntheticScore, scoreRule(...)) so a strong PR side can still outscore a weak
+  // probe once merged, rather than always deferring to the synthetic value.
+  const score =
+    rule.syntheticScore !== undefined
+      ? Math.max(rule.syntheticScore, scoreRule(rule.evidence, rule.verdict, nowMs, rule.generality))
+      : scoreRule(rule.evidence, rule.verdict, nowMs, rule.generality);
   const lastCorroborated =
     rule.verdict === "corroborated" || rule.verdict === "trending-toward"
       ? new Date(nowMs).toISOString()

@@ -796,6 +796,97 @@ test("Task 3: same norm filed under two different categories merges into one rul
   expect(calls).toBe(5);
 });
 
+// ---- Fix: dedup merge must not discard the synthetic probe signal ----------
+//
+// Reviewer's exact repro: a synthetic code-only rule (mergeCodeOnlyPatterns, no PR
+// evidence, recurrence-floor-EXEMPT) states the same norm as a single-PR CONTRIBUTOR
+// rule (weak: 1 distinct PR, no maintainer evidence -> recurrence-floor-FAILING on
+// its own). pickKeptMember always picks the PR-evidenced side (1 evidence entry beats
+// the synthetic's 0), and the old `...kept` spread silently dropped syntheticScore —
+// so the merged rule lost its floor exemption and its probe-verified score, and was
+// wrongly dropped as "recurrence-floor" even though both halves rendered fine on
+// their own pre-merge. Fix: syntheticScore carries forward onto the merged record
+// (max across all merged members) regardless of which member pickKeptMember keeps,
+// and toRuleRecord scores the merged record as max(syntheticScore, scoreRule(...)).
+
+const SYNTH_MERGE_PATTERN_STATEMENT = "Gate TTY-only output behind an isatty check";
+const SYNTH_MERGE_PR_STATEMENT = "Don't print ANSI codes unless attached to a terminal";
+
+test("Fix: a merge between a synthetic code-only rule and a weak single-PR rule renders (not floored, not dropped); score reflects max(syntheticScore, scoreRule)", async () => {
+  const repo = await buildFixtureRepo();
+
+  const quote = "do not print ansi codes unless we are attached to a terminal";
+  const synthCandidates: CandidateLearning[] = [
+    {
+      statement: SYNTH_MERGE_PR_STATEMENT,
+      category: "process",
+      polarity: "prescriptive",
+      scope: [],
+      evidence: [{ pr: 30, author: "contrib1", association: "CONTRIBUTOR", quote, createdAt: "2026-06-20T00:00:00Z" }],
+    },
+  ];
+
+  const synthPrs: NormalizedPr[] = [{
+    number: 30, title: "PR 30", body: `Reviewing this. ${quote}. Thanks!`,
+    author: "contrib1", authorAssociation: "CONTRIBUTOR", state: "MERGED", mergedAt: null,
+    updatedAt: "2026-06-20T00:00:00Z", labels: [], files: [], threads: [], reviews: [], comments: [],
+  }];
+
+  // Code-only pattern with confidence 0.5 -> syntheticScore = 0.3 + 0.4*0.5 = 0.5.
+  // No shared >=5-char word with SYNTH_MERGE_PR_STATEMENT, so mergeCodeOnlyPatterns
+  // does NOT treat it as already covered -> it becomes synthetic rule "code-0".
+  const synthPatterns: PatternsModel = {
+    areas: [],
+    patterns: [{ statement: SYNTH_MERGE_PATTERN_STATEMENT, scope: [], exemplars: ["src/tty.ts"], confidence: 0.5 }],
+    migrations: [],
+    meta: { languages: [], frameworks: [], tooling: [] },
+  };
+
+  const provider: ModelProvider = {
+    spentUsd: () => 0,
+    async complete<T>({ prompt }: CompleteOptions<T>): Promise<T> {
+      if (prompt.startsWith("intent:")) {
+        return { title: "T", overview: "", perArea: false, sections: [{ heading: "All", ruleIds: ["0"] }] } as T;
+      }
+      if (prompt.startsWith("meta:")) {
+        return { proposals: [{ clusterId: 0, proposedVerdict: "corroborated" }] } as T;
+      }
+      // The dedup pass proposes merging the synthetic ("code-0") with the single-PR
+      // rule (global cluster id 0, "process" being the only non-empty bucket).
+      if (prompt.startsWith("dedupe:")) return { mergeSets: [{ ids: [0, "code-0"] }] } as T;
+      return { groups: [{ memberIndexes: [0], canonicalStatement: SYNTH_MERGE_PR_STATEMENT }] } as T;
+    },
+  };
+
+  const { draft, provenance } = await synthesize(baseConfig, synthPatterns, synthCandidates, synthPrs, {
+    provider,
+    repoPath: repo,
+    now,
+  });
+
+  // Not dropped: pre-fix, the merged record loses syntheticScore, fails the
+  // recurrence floor (1 distinct PR, CONTRIBUTOR-only), and lands in `dropped`
+  // with a misleading "recurrence-floor" reason despite both halves rendering
+  // fine standalone.
+  expect(provenance.dropped).toHaveLength(0);
+  expect(provenance.rules).toHaveLength(1);
+
+  const kept = provenance.rules[0]!;
+  expect(kept.id).toBe("0"); // pickKeptMember: PR side (1 evidence) beats synthetic (0 evidence)
+  expect(kept.mergedFrom).toEqual(["code-0"]);
+  expect(kept.droppedReason).toBeUndefined();
+
+  // Score reflects max(syntheticScore=0.5, scoreRule(evidence, verdict, now, generality)).
+  // scoreRule here = authority(CONTRIBUTOR=0.5) x recurrence(1 PR=0.5) x recency(~0.98,
+  // 11 days old) x corroboration(corroborated=1) x generality(untagged=1) ~= 0.2448,
+  // well under the synthetic's 0.5 -- so the probe signal wins, but the merge still
+  // carries a live PR-evidence path that COULD have won had it been stronger.
+  expect(kept.score).toBeCloseTo(0.5, 4);
+
+  expect(draft).toContain(SYNTH_MERGE_PR_STATEMENT); // kept member's own statement renders
+  expect(draft).not.toContain(SYNTH_MERGE_PATTERN_STATEMENT); // absorbed synthetic's statement does not
+});
+
 // ---- v0.3 Task 4: tiered rendering (maxRules + compact tail) ----------------
 //
 // Reuses Test 1's exact fixture (candidates/prs/patterns/scriptedProvider) so
