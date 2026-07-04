@@ -283,6 +283,50 @@ test("overflow queue round-trip", async () => {
   expect(pr7Deliveries[0]!.comments).toBe(3);
 });
 
+test("overflow refetch pass drops PRs from authors not in the filter", async () => {
+  // Defense-in-depth: even if an overflowQueue entry reaches the refetch pass
+  // for an author the current config no longer wants (e.g. a queue seeded by
+  // some future path that skips the main loop's author check), the refetch
+  // pass must apply the same filter rather than blindly appending it.
+  const config = mkConfig({ authors: ["alice"] });
+  const { stateDir } = await freshDeps();
+
+  const nonMatchingNode = mkPr(9, "2026-06-01T00:00:00Z", {
+    author: { login: "mallory", __typename: "User" },
+  });
+  const perPrResponses = {
+    9: { rateLimit: rateLimit(), repository: { pullRequest: nonMatchingNode } },
+  };
+  const { transport } = fakeTransport([], perPrResponses);
+
+  const cp: Checkpoint = {
+    configHash: configHash(config),
+    stage: "extracting",
+    cursor: null,
+    overflowQueue: [9],
+    maxUpdatedAt: null,
+    counters: { kept: 0 },
+  };
+  await saveCheckpoint(stateDir, cp);
+
+  const delivered: number[] = [];
+  const summary = await fetchCorpus(config, {
+    transport,
+    throttle: quietThrottle(),
+    stateDir,
+    onPr: (pr) => delivered.push(pr.number),
+  });
+
+  expect(summary.overflowRefetched).toBe(1);
+  expect(delivered).toEqual([]);
+
+  const { prs } = await readCorpus(join(stateDir, "corpus.jsonl"));
+  expect(prs.find((p) => p.number === 9)).toBeUndefined();
+
+  const finalCp = await loadCheckpoint(stateDir);
+  expect(finalCp?.overflowQueue).toEqual([]);
+});
+
 test("resume from checkpoint", async () => {
   const config = mkConfig();
   const { stateDir } = await freshDeps();

@@ -1,4 +1,5 @@
 import { mkdtemp } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
@@ -59,4 +60,45 @@ test("configHash is stable and ignores intent/output changes", () => {
   expect(configHash(base)).toBe(configHash(differentIntent));
   expect(configHash(base)).not.toBe(configHash(differentRepo));
   expect(configHash(base)).toMatch(/^[0-9a-f]{64}$/);
+});
+
+test("configHash changes when authors filter changes, normalized case/order-insensitive", () => {
+  const base = MineConfigSchema.parse({ repo: "o/r", intent: "onboarding" });
+  const withAlice = MineConfigSchema.parse({ repo: "o/r", intent: "onboarding", authors: ["alice"] });
+  const withBob = MineConfigSchema.parse({ repo: "o/r", intent: "onboarding", authors: ["bob"] });
+  expect(configHash(withAlice)).not.toBe(configHash(base));
+  expect(configHash(withAlice)).not.toBe(configHash(withBob));
+
+  const mixedCase = MineConfigSchema.parse({
+    repo: "o/r",
+    intent: "onboarding",
+    authors: ["Alice", "BOB"],
+  });
+  const reorderedLower = MineConfigSchema.parse({
+    repo: "o/r",
+    intent: "onboarding",
+    authors: ["bob", "alice"],
+  });
+  expect(configHash(mixedCase)).toBe(configHash(reorderedLower));
+});
+
+test("configHash for an empty/absent authors filter matches the pre-authors-feature hash", () => {
+  const base = MineConfigSchema.parse({ repo: "o/r", intent: "onboarding" });
+  const explicitEmpty = MineConfigSchema.parse({ repo: "o/r", intent: "onboarding", authors: [] });
+  expect(configHash(base)).toBe(configHash(explicitEmpty));
+
+  // Pinned against the identity shape as it existed before `authors` was added,
+  // so old .prlore stateDirs (checkpoints hashed pre-feature) keep resuming
+  // instead of silently refetching everything on upgrade.
+  const preFeatureHash = createHash("sha256")
+    .update(
+      JSON.stringify({
+        repo: "o/r",
+        baseUrl: "https://api.github.com",
+        since: null,
+        maxPrs: 1500,
+      }),
+    )
+    .digest("hex");
+  expect(configHash(base)).toBe(preFeatureHash);
 });

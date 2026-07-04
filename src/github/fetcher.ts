@@ -190,7 +190,10 @@ export async function fetchCorpus(config: MineConfig, deps: FetchDeps): Promise<
       const node = res.repository.pullRequest;
       if (node) {
         const result = normalizePr(node, ingest);
-        if (result.kept) {
+        // Defense-in-depth: the config hash now prevents a stale, cross-author-config
+        // queue from reaching here, but re-apply the filter anyway in case some future
+        // path seeds overflowQueue without going through the main loop's author check.
+        if (result.kept && authorMatches(result.pr.author, config.authors)) {
           await appendJsonl(corpusPath, result.pr);
           deps.onPr?.(result.pr);
         }
