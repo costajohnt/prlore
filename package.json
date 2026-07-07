@@ -1,6 +1,6 @@
 {
   "name": "prlore",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Mine a repo's PR-review history and current code into a portable AGENTS.md conventions file",
   "license": "MIT",
   "type": "module",
