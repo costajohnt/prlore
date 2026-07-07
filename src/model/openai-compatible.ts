@@ -3,6 +3,24 @@ import { BudgetExceededError, type CompleteOptions, type ModelProvider } from ".
 import { appendSchemaHint } from "./schema-hint.js";
 
 const BODY_EXCERPT_LEN = 300;
+const DEFAULT_MAX_RATE_LIMIT_RETRIES = 4;
+const MAX_RETRY_AFTER_MS = 60_000;
+
+export class RateLimitError extends Error {
+  constructor(msg: string) {
+    super(msg);
+    this.name = "RateLimitError";
+  }
+}
+
+export function retryAfterMs(headers: Headers): number {
+  const ra = headers.get("retry-after");
+  if (ra) {
+    const secs = Number(ra);
+    if (Number.isFinite(secs) && secs >= 0) return Math.min(secs * 1000, MAX_RETRY_AFTER_MS);
+  }
+  return 1000;
+}
 
 export interface OpenAICompatibleOpts {
   baseUrl: string;
@@ -64,22 +82,33 @@ export class OpenAICompatibleProvider implements ModelProvider {
     throw new Error(`model output failed schema validation twice: ${lastError}`);
   }
 
-  // v1: no 429 handling yet — any non-2xx throws a generic error. Task 2 layers
-  // rate-limit retry/backoff on top of this method.
   private async post(body: unknown): Promise<ChatResponse> {
-    const res = await this.fetchFn(`${this.opts.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(this.opts.apiKey ? { authorization: `Bearer ${this.opts.apiKey}` } : {}),
-      },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      const excerpt = (await res.text()).slice(0, BODY_EXCERPT_LEN);
-      throw new Error(`model endpoint returned ${res.status}: ${excerpt}`);
+    const maxRetries = this.opts.maxRateLimitRetries ?? DEFAULT_MAX_RATE_LIMIT_RETRIES;
+    const sleep = this.opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    for (let rl = 0; ; rl++) {
+      const res = await this.fetchFn(`${this.opts.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(this.opts.apiKey ? { authorization: `Bearer ${this.opts.apiKey}` } : {}),
+        },
+        body: JSON.stringify(body),
+      });
+      if (res.status === 429) {
+        if (rl >= maxRetries) {
+          throw new RateLimitError(
+            "model endpoint rate limit / daily quota exhausted. Use --provider ollama for a local unlimited run, or set ANTHROPIC_API_KEY for a full mine.",
+          );
+        }
+        await sleep(retryAfterMs(res.headers));
+        continue;
+      }
+      if (!res.ok) {
+        const excerpt = (await res.text()).slice(0, BODY_EXCERPT_LEN);
+        throw new Error(`model endpoint returned ${res.status}: ${excerpt}`);
+      }
+      return (await res.json()) as ChatResponse;
     }
-    return (await res.json()) as ChatResponse;
   }
 
   private track(usage: ChatUsage | undefined): void {
