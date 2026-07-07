@@ -37,8 +37,11 @@ export const MineConfigSchema = z.object({
       // unchanged by this default flip; see selectProvider() in
       // src/model/select-provider.ts for the resolution logic and the "sampling"
       // hard-error, which still lives at the mine tool layer (src/server-tools.ts).
-      provider: z.enum(["anthropic", "claude-cli", "sampling", "auto"]).default("auto"),
+      provider: z
+        .enum(["anthropic", "claude-cli", "sampling", "auto", "github-models", "ollama", "openai"])
+        .default("auto"),
       model: z.string().optional(),
+      baseUrl: z.string().url().optional(),
       maxBudgetUsd: z.number().positive().default(10),
     })
     .prefault({}),

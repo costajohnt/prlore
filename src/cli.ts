@@ -52,8 +52,10 @@ export const USAGE = `usage: prlore mine <owner/repo> [options]
                              review feedback these authors received.
   --budget <usd>             max USD to spend on model calls (default: 10)
   --model <id>                model id override
-  --provider <anthropic|claude-cli|auto>
+  --provider <anthropic|claude-cli|github-models|ollama|openai|auto>
                              which model backend to use (default: auto)
+  --base-url <url>            base URL for --provider openai
+                             (or OPENAI_BASE_URL); ignored by other providers
   --repo-path <path>         local checkout to mine against (default: cwd)
   --target <file>            output file (default: AGENTS.md)
   --max-rules <n>             cap on rules rendered in full detail; the rest
@@ -73,7 +75,7 @@ interface ParsedMineArgs {
   configInput: Record<string, unknown>;
 }
 
-const PROVIDER_VALUES = ["anthropic", "claude-cli", "auto"] as const;
+const PROVIDER_VALUES = ["anthropic", "claude-cli", "auto", "github-models", "ollama", "openai"] as const;
 
 function parseMineArgs(argv: string[], now: () => number): ParsedMineArgs {
   let values: Record<string, string | boolean | string[] | undefined>;
@@ -91,6 +93,7 @@ function parseMineArgs(argv: string[], now: () => number): ParsedMineArgs {
         budget: { type: "string" },
         model: { type: "string" },
         provider: { type: "string" },
+        "base-url": { type: "string" },
         "repo-path": { type: "string" },
         target: { type: "string" },
         "max-rules": { type: "string" },
@@ -137,6 +140,8 @@ function parseMineArgs(argv: string[], now: () => number): ParsedMineArgs {
     );
   }
 
+  const baseUrl = values["base-url"] as string | undefined;
+
   const repoPath = (values["repo-path"] as string | undefined) ?? process.cwd();
   const target = (values.target as string | undefined) ?? "AGENTS.md";
   const authors = (values.author as string[] | undefined) ?? [];
@@ -169,6 +174,7 @@ function parseMineArgs(argv: string[], now: () => number): ParsedMineArgs {
       model: {
         ...(provider !== undefined ? { provider } : {}),
         ...(values.model !== undefined ? { model: values.model } : {}),
+        ...(baseUrl !== undefined ? { baseUrl } : {}),
         ...(maxBudgetUsd !== undefined ? { maxBudgetUsd } : {}),
       },
     },

@@ -663,3 +663,47 @@ test("contested items are listed to stderr and stripped from the written file us
   expect(written).not.toContain("Mentions ## Needs your call");
   expect(written).toContain("Always write tests first");
 });
+
+// ---- --provider / --base-url: new providers surfaced through config schema + CLI --
+
+test("--provider openai with --base-url threads provider + baseUrl into config.model", async () => {
+  const repoPath = await tmpRepo();
+  const manager = new ScriptedJobManager([readyStatus()], { draft: mkDraft([]), provenance: mkProvenance([mkRule()]), contested: [] });
+  const { stdout, stderr } = streams();
+
+  const code = await runMineCli(
+    baseArgv("octo/repo", repoPath, ["--provider", "openai", "--base-url", "https://api.example/v1", "--model", "gpt-x"]),
+    { makeDeps, manager, stdout, stderr, confirm: async () => true, pollIntervalMs: 0 },
+  );
+
+  expect(code).toBe(0);
+  expect(manager.startCalls[0]!.config.model.provider).toBe("openai");
+  expect(manager.startCalls[0]!.config.model.baseUrl).toBe("https://api.example/v1");
+  expect(manager.startCalls[0]!.config.model.model).toBe("gpt-x");
+});
+
+test("--provider github-models is accepted and lands in config.model.provider", async () => {
+  const repoPath = await tmpRepo();
+  const manager = new ScriptedJobManager([readyStatus()], { draft: mkDraft([]), provenance: mkProvenance([mkRule()]), contested: [] });
+  const { stdout, stderr } = streams();
+
+  const code = await runMineCli(baseArgv("octo/repo", repoPath, ["--provider", "github-models"]), {
+    makeDeps, manager, stdout, stderr, confirm: async () => true, pollIntervalMs: 0,
+  });
+
+  expect(code).toBe(0);
+  expect(manager.startCalls[0]!.config.model.provider).toBe("github-models");
+});
+
+test("an unknown --provider exits 2 and the error lists the new values", async () => {
+  const repoPath = await tmpRepo();
+  const manager = new ScriptedJobManager([readyStatus()]);
+  const { stdout, stderr, err } = streams();
+
+  const code = await runMineCli(baseArgv("octo/repo", repoPath, ["--provider", "nope"]), {
+    makeDeps, manager, stdout, stderr, confirm: async () => true, pollIntervalMs: 0,
+  });
+
+  expect(code).toBe(2);
+  expect(err()).toMatch(/github-models|ollama/);
+});

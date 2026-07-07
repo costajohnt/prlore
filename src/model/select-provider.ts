@@ -87,5 +87,17 @@ export function selectProvider(
       throw new Error(
         "no model provider available: set ANTHROPIC_API_KEY to use the Anthropic API, or install Claude Code so the `claude` CLI is on PATH to use your subscription instead",
       );
+
+    case "github-models":
+    case "ollama":
+    case "openai":
+      // Schema/CLI surface only (this task exposes these values in config +
+      // --provider); actual construction is wired in a follow-up task. Thrown
+      // here (rather than silently falling through) so a config that sets one
+      // of these fails fast and clearly instead of hitting an exhaustiveness
+      // gap.
+      throw new Error(
+        `model.provider "${config.provider}" is not wired up yet`,
+      );
   }
 }
