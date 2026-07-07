@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { AnthropicProvider } from "./anthropic.js";
 import { ClaudeCliProvider } from "./claude-cli.js";
+import { OpenAICompatibleProvider } from "./openai-compatible.js";
 import type { ModelProvider } from "./provider.js";
 import type { MineConfig } from "../schemas/mine-config.js";
 
@@ -52,6 +53,48 @@ export function selectProvider(
   const buildClaudeCli = (): ModelProvider =>
     new ClaudeCliProvider({ model: config.model, maxBudgetUsd: config.maxBudgetUsd, onWarn: onNotice });
 
+  const GITHUB_MODELS_BASE = "https://models.github.ai/inference";
+
+  const buildOpenAICompatible = (o: {
+    baseUrl: string;
+    apiKey?: string;
+    model: string;
+  }): ModelProvider =>
+    new OpenAICompatibleProvider({
+      baseUrl: o.baseUrl,
+      apiKey: o.apiKey,
+      model: o.model,
+      maxBudgetUsd: config.maxBudgetUsd,
+      onWarn: onNotice,
+      // pricePerMTok intentionally omitted: these endpoints are free-tier or
+      // arbitrary, so cost tracking is disabled and --max-budget won't gate them.
+    });
+
+  const buildGithubModels = (): ModelProvider => {
+    const key = env.GITHUB_TOKEN || env.GH_TOKEN;
+    if (!key) {
+      throw new Error(
+        'model.provider "github-models" requires GITHUB_TOKEN or GH_TOKEN to be set (present automatically in GitHub Actions / Codespaces / Copilot environments)',
+      );
+    }
+    return buildOpenAICompatible({ baseUrl: GITHUB_MODELS_BASE, apiKey: key, model: config.model ?? "openai/gpt-4o-mini" });
+  };
+
+  const buildOllama = (): ModelProvider =>
+    buildOpenAICompatible({
+      baseUrl: env.OLLAMA_BASE_URL || "http://localhost:11434/v1",
+      model: config.model ?? "qwen2.5:7b",
+    });
+
+  const buildOpenAI = (): ModelProvider => {
+    const baseUrl = config.baseUrl ?? env.OPENAI_BASE_URL;
+    if (!baseUrl) throw new Error('model.provider "openai" requires --base-url or OPENAI_BASE_URL to be set');
+    if (!config.model) throw new Error('model.provider "openai" requires --model to be set');
+    const key = env.OPENAI_API_KEY;
+    if (!key) throw new Error('model.provider "openai" requires OPENAI_API_KEY to be set');
+    return buildOpenAICompatible({ baseUrl, apiKey: key, model: config.model });
+  };
+
   switch (config.provider) {
     case "anthropic":
       return buildAnthropic();
@@ -84,20 +127,21 @@ export function selectProvider(
         onNotice("no ANTHROPIC_API_KEY — using local claude CLI (subscription usage limits apply)");
         return buildClaudeCli();
       }
+      if (env.GITHUB_TOKEN || env.GH_TOKEN) {
+        onNotice("no ANTHROPIC_API_KEY and no claude CLI — using GitHub Models (free-tier rate limits apply; use --provider ollama for a full mine)");
+        return buildGithubModels();
+      }
       throw new Error(
-        "no model provider available: set ANTHROPIC_API_KEY to use the Anthropic API, or install Claude Code so the `claude` CLI is on PATH to use your subscription instead",
+        "no model provider available: set ANTHROPIC_API_KEY (Anthropic API), install Claude Code (claude CLI), set GITHUB_TOKEN (GitHub Models), or use --provider ollama for a local model",
       );
 
     case "github-models":
+      return buildGithubModels();
+
     case "ollama":
+      return buildOllama();
+
     case "openai":
-      // Schema/CLI surface only (this task exposes these values in config +
-      // --provider); actual construction is wired in a follow-up task. Thrown
-      // here (rather than silently falling through) so a config that sets one
-      // of these fails fast and clearly instead of hitting an exhaustiveness
-      // gap.
-      throw new Error(
-        `model.provider "${config.provider}" is not wired up yet`,
-      );
+      return buildOpenAI();
   }
 }

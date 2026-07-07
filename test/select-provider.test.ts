@@ -2,6 +2,7 @@ import { expect, test, vi } from "vitest";
 import { selectProvider, hasClaudeCli } from "../src/model/select-provider.js";
 import { AnthropicProvider } from "../src/model/anthropic.js";
 import { ClaudeCliProvider } from "../src/model/claude-cli.js";
+import { OpenAICompatibleProvider } from "../src/model/openai-compatible.js";
 
 const baseModelConfig = { provider: "anthropic" as const, maxBudgetUsd: 10 };
 
@@ -130,4 +131,63 @@ test("hasClaudeCli returns false when the probe exits non-zero or errors", async
     throw new Error("spawn failed");
   });
   expect(hasClaudeCli()).toBe(false);
+});
+
+// ---- presets --------------------------------------------------------------
+
+test('"github-models" with a GitHub token constructs an OpenAICompatibleProvider', () => {
+  const p = selectProvider({ ...baseModelConfig, provider: "github-models" }, { GITHUB_TOKEN: "ghtok" }, () => false, noop);
+  expect(p).toBeInstanceOf(OpenAICompatibleProvider);
+});
+
+test('"github-models" also accepts GH_TOKEN', () => {
+  const p = selectProvider({ ...baseModelConfig, provider: "github-models" }, { GH_TOKEN: "ghtok" }, () => false, noop);
+  expect(p).toBeInstanceOf(OpenAICompatibleProvider);
+});
+
+test('"github-models" with no token throws naming GITHUB_TOKEN', () => {
+  const msg = captureThrow(() => selectProvider({ ...baseModelConfig, provider: "github-models" }, {}, () => false, noop));
+  expect(msg).toMatch(/GITHUB_TOKEN/);
+});
+
+test('"ollama" needs no key and constructs the provider', () => {
+  const p = selectProvider({ ...baseModelConfig, provider: "ollama" }, {}, () => false, noop);
+  expect(p).toBeInstanceOf(OpenAICompatibleProvider);
+});
+
+test('"openai" requires base URL, model, and OPENAI_API_KEY', () => {
+  expect(captureThrow(() => selectProvider({ ...baseModelConfig, provider: "openai" }, {}, () => false, noop))).toMatch(/base|OPENAI_BASE_URL/i);
+  const withBase = { ...baseModelConfig, provider: "openai" as const, baseUrl: "https://api.example/v1" };
+  expect(captureThrow(() => selectProvider(withBase, { OPENAI_API_KEY: "k" }, () => false, noop))).toMatch(/--model/);
+  const full = { ...withBase, model: "gpt-x" };
+  expect(selectProvider(full, { OPENAI_API_KEY: "k" }, () => false, noop)).toBeInstanceOf(OpenAICompatibleProvider);
+});
+
+// ---- auto ordering --------------------------------------------------------
+
+test('"auto" falls back to github-models when only a GitHub token is present', () => {
+  const onNotice = vi.fn();
+  const p = selectProvider({ ...baseModelConfig, provider: "auto" }, { GITHUB_TOKEN: "ghtok" }, () => false, onNotice);
+  expect(p).toBeInstanceOf(OpenAICompatibleProvider);
+  expect(onNotice).toHaveBeenCalled();
+});
+
+test('"auto" prefers Anthropic over a GitHub token', () => {
+  const p = selectProvider({ ...baseModelConfig, provider: "auto" }, { ANTHROPIC_API_KEY: "sk", GITHUB_TOKEN: "gh" }, () => false, noop);
+  expect(p).toBeInstanceOf(AnthropicProvider);
+});
+
+test('"auto" prefers the claude CLI over a GitHub token', () => {
+  const p = selectProvider({ ...baseModelConfig, provider: "auto" }, { GITHUB_TOKEN: "gh" }, () => true, noop);
+  expect(p).toBeInstanceOf(ClaudeCliProvider);
+});
+
+test('"auto" with nothing available throws mentioning the new providers', () => {
+  const msg = captureThrow(() => selectProvider({ ...baseModelConfig, provider: "auto" }, {}, () => false, noop));
+  expect(msg).toMatch(/github-models|ollama/);
+});
+
+test('"auto" does NOT pick ollama on its own', () => {
+  // no anthropic key, no claude CLI, no github token -> error, not an Ollama provider
+  expect(() => selectProvider({ ...baseModelConfig, provider: "auto" }, {}, () => false, noop)).toThrow();
 });
