@@ -46,8 +46,10 @@ usage: prlore mine <owner/repo> [options]
                              review feedback these authors received.
   --budget <usd>             max USD to spend on model calls (default: 10)
   --model <id>                model id override
-  --provider <anthropic|claude-cli|auto>
+  --provider <anthropic|claude-cli|github-models|ollama|openai|auto>
                              which model backend to use (default: auto)
+  --base-url <url>           base URL for --provider openai (or
+                             OPENAI_BASE_URL); ignored by other providers
   --repo-path <path>         local checkout to mine against (default: cwd)
   --target <file>            output file (default: AGENTS.md)
   --max-rules <n>             cap on rules rendered in full detail; the rest
@@ -180,23 +182,51 @@ works cold.
 
 `model.provider` selects which model backend runs the mining calls:
 
-- `"auto"` (the default) — uses the Anthropic API if `ANTHROPIC_API_KEY` is
-  set; otherwise falls back to the local `claude` CLI if it's on PATH; errors
-  naming both remedies if neither is available.
-- `"anthropic"` — always uses the Anthropic API. Requires
+- `"auto"` (the default): uses the Anthropic API if `ANTHROPIC_API_KEY` is
+  set; otherwise falls back to the local `claude` CLI if it's on PATH;
+  otherwise falls back to GitHub Models if `GITHUB_TOKEN`/`GH_TOKEN` is set
+  (present automatically in GitHub Actions, Codespaces, and Copilot); errors
+  naming all remedies if none is available. `"ollama"` is never chosen by
+  `auto`, since it depends on a local server being up; pass `--provider
+  ollama` explicitly.
+- `"anthropic"`: always uses the Anthropic API. Requires
   `ANTHROPIC_API_KEY`; fails immediately with a clear error if it's unset
   (rather than failing deep inside the pipeline on the first call).
-- `"claude-cli"` — always uses your locally installed, already-authenticated
+- `"claude-cli"`: always uses your locally installed, already-authenticated
   Claude Code CLI in headless mode. No API key needed, but usage draws on
   your Claude subscription's usage limits, not billed API credits. Its
   default model is whatever the `claude` CLI itself defaults to (prlore
   doesn't override it unless `model.model` is set); the Anthropic provider's
   default is `claude-sonnet-5` (see `src/model/anthropic.ts` for the current
   price table).
+- `"github-models"`: uses GitHub Models (`https://models.github.ai/inference`),
+  an OpenAI-compatible endpoint. Requires `GITHUB_TOKEN` or `GH_TOKEN`;
+  default model is `openai/gpt-4o-mini`. Free tier, but rate-limited (roughly
+  50-150 model calls per day, depending on model), so it realistically only
+  covers a small mine; see "Running inside GitHub Copilot / Codespaces" below.
+- `"ollama"`: uses a local Ollama server at `http://localhost:11434/v1` (or
+  `OLLAMA_BASE_URL`), no API key needed. Default model is `qwen2.5:7b`. No
+  rate limits, so this is the option for a full mine with no billed API.
+- `"openai"`: generic OpenAI-compatible endpoint for any other provider.
+  Requires `--base-url` (or `OPENAI_BASE_URL`), `OPENAI_API_KEY`, and
+  `--model`/`model.model`.
 - `"sampling"` also exists in the config schema (MCP sampling as a fallback
   when no API key is configured), but that path isn't wired yet. `mine`
   rejects `provider: "sampling"` with a tool error rather than silently
   running another provider in its place.
+
+For `"github-models"`, `"ollama"`, and `"openai"`, cost tracking is disabled
+(these endpoints are free-tier or arbitrarily priced), so `--budget`/
+`model.maxBudgetUsd` does not gate them.
+
+### Running inside GitHub Copilot / Codespaces
+
+prlore auto-detects the environment's `GITHUB_TOKEN` and uses GitHub Models, so
+`npx prlore mine <owner/repo>` works with no extra setup. Note the free-tier
+rate limits (roughly 50-150 model calls per day, depending on model), which
+realistically only cover a small mine; scope it down with `--days` or a small
+window. For a full mine, run a local model with `--provider ollama` (no rate
+limits) or set `ANTHROPIC_API_KEY`.
 
 ## Development
 
