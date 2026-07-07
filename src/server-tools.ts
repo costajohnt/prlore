@@ -1,12 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { makeTransport, resolveToken, withRetry } from "./github/client.js";
 import { emitDraft, EmitRefusedError, type EmitTarget } from "./emitter/emit.js";
 import { finalizeDraft } from "./emitter/finalize.js";
-import { checkMarkers, isMarkerIssue } from "./emitter/markers.js";
+import { previewEmitMode, writePlanSummary } from "./emitter/mode.js";
 import type { JobDeps, JobManagerApi } from "./jobs/manager.js";
 import { hasClaudeCli, selectProvider } from "./model/select-provider.js";
 import { MineConfigSchema, type MineConfig } from "./schemas/mine-config.js";
@@ -48,22 +47,6 @@ function jsonContent(value: unknown) {
 function toolError(err: unknown) {
   const message = err instanceof Error ? err.message : String(err);
   return { isError: true as const, content: [{ type: "text" as const, text: message }] };
-}
-
-// Read-only peek at whether a write would hit EmitRefusedError, without touching the
-// file. Shares emit.ts's exact marker-validity check (missing / duplicated / reversed
-// marker pair) via markers.ts's checkMarkers, but only ever returns a boolean — this
-// is a preview, not a write, so it must never throw for an ordinary "not managed yet"
-// file.
-async function refusalPreflight(repoPath: string, target: string): Promise<{ targetExists: boolean; wouldRefuse: boolean }> {
-  let content: string;
-  try {
-    content = await readFile(join(repoPath, target), "utf8");
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { targetExists: false, wouldRefuse: false };
-    throw err;
-  }
-  return { targetExists: true, wouldRefuse: isMarkerIssue(checkMarkers(content)) };
 }
 
 // The confirm-token gate (spec §8) and the target/layout the last `mine` call
@@ -186,7 +169,16 @@ export function registerTools(
           contested: result.contested,
         };
 
-        const { targetExists, wouldRefuse } = await refusalPreflight(lastMineTarget.repoPath, lastMineTarget.target);
+        // Read-only preview of which mode `write` will run (direct vs pointer)
+        // and whether it would refuse. An unmarked human `<target>` now ADOPTS
+        // pointer mode (full doc → .prlore/<target>, a pointer block appended to
+        // the human file) rather than refusing; only corrupt/lone markers, or an
+        // unmarked/corrupt `.prlore/<target>`, still refuse. writePlan tells the
+        // caller in one line what will actually happen.
+        const modePreview = await previewEmitMode(lastMineTarget.repoPath, lastMineTarget.target);
+        const writePlan = modePreview.wouldRefuse
+          ? `would refuse to write ${lastMineTarget.target}: ${modePreview.reason ?? "corrupt managed-block markers"}`
+          : writePlanSummary(modePreview.mode, lastMineTarget.target);
 
         return jsonContent({
           markdown: result.draft,
@@ -197,8 +189,11 @@ export function registerTools(
             contestedCount: result.contested.length,
           },
           confirmToken: token,
-          targetExists,
-          wouldRefuse,
+          targetExists: modePreview.targetExists,
+          wouldRefuse: modePreview.wouldRefuse,
+          mode: modePreview.mode,
+          writePlan,
+          ...(modePreview.reason ? { refusalReason: modePreview.reason } : {}),
         });
       } catch (err) {
         return toolError(err);

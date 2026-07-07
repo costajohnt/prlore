@@ -200,6 +200,8 @@ test("mine -> status -> preview -> write happy path", async () => {
   expect(preview.stats).toEqual({ rulesIncluded: 1, droppedCount: 0, contestedCount: 0 });
   expect(preview.targetExists).toBe(false);
   expect(preview.wouldRefuse).toBe(false);
+  expect(preview.mode).toBe("direct"); // no root AGENTS.md → direct fresh-wrap
+  expect(preview.writePlan).toMatch(/AGENTS\.md/);
   expect(typeof preview.confirmToken).toBe("string");
 
   const writeRes = await client.callTool({ name: "write", arguments: { confirmToken: preview.confirmToken } });
@@ -392,14 +394,56 @@ test("cancel returns { checkpointed } and never crashes for an unknown jobId", a
   expect(JSON.parse(textOf(res))).toEqual({ checkpointed: false });
 });
 
+// ---- pointer-mode adoption: an unmarked human AGENTS.md no longer refuses ------
+//
+// Per the pointer-mode design: an existing AGENTS.md with NEITHER marker is a
+// clean human file, so `write` adopts pointer mode — the full mined doc goes to
+// `.prlore/AGENTS.md` and a tiny pointer block is appended to the human file,
+// which is never rewritten. preview must report this as pointer mode, NOT refuse.
+
+test("preview reports pointer mode (not refusal) for an unmarked human AGENTS.md, and write adopts it", async () => {
+  const repoPath = await tmpRepo();
+  const original = "# Hand-authored AGENTS.md\n\nNo managed block here.\n";
+  await writeFile(join(repoPath, "AGENTS.md"), original, "utf8");
+
+  const manager = new StubJobManager();
+  const client = await connectedClient(manager);
+  await client.callTool({ name: "mine", arguments: { repo: "octo/repo", intent: "x", repoPath } });
+  manager.completeToReady({ draft: mkDraft([]), provenance: mkProvenance([mkRule()]), contested: [] });
+
+  const preview = JSON.parse(textOf(await client.callTool({ name: "preview", arguments: {} })));
+  expect(preview.targetExists).toBe(true);
+  expect(preview.wouldRefuse).toBe(false);
+  expect(preview.mode).toBe("pointer");
+  expect(preview.writePlan).toMatch(/\.prlore\/AGENTS\.md/);
+  expect(preview.writePlan).toMatch(/pointer block/i);
+
+  const writeRes = await client.callTool({ name: "write", arguments: { confirmToken: preview.confirmToken } });
+  expect(writeRes.isError).toBeFalsy();
+  const writeOut = JSON.parse(textOf(writeRes));
+  expect(writeOut.pathsWritten).toContain(join(repoPath, ".prlore", "AGENTS.md"));
+  expect(writeOut.pathsWritten).toContain(join(repoPath, "AGENTS.md"));
+
+  // The human prose above the appended pointer block is byte-identical.
+  const written = await readFile(join(repoPath, "AGENTS.md"), "utf8");
+  expect(written.startsWith(original)).toBe(true);
+  expect(written).toContain(".prlore/AGENTS.md");
+  // The full mined doc landed in the prlore-owned file, not the human one.
+  const prloreDoc = await readFile(join(repoPath, ".prlore", "AGENTS.md"), "utf8");
+  expect(prloreDoc).toContain("Always write tests first");
+  expect(written).not.toContain("Always write tests first");
+});
+
 // ---- EmitRefusedError surfaces as a clean tool error, not a crash --------------
 
-test("write against a target with a broken managed-block surfaces EmitRefusedError as a clean tool error", async () => {
+test("write against a target with a corrupt/lone managed-block marker surfaces EmitRefusedError as a clean tool error", async () => {
   const repoPath = await tmpRepo();
-  // No markers at all: emitDraft's validation pass throws EmitRefusedError before
-  // any write happens (ADR 004) — the write tool must turn that into isError
-  // content, not an uncaught crash, and must not touch the file.
-  const original = "# Hand-authored AGENTS.md\n\nNo managed block here.\n";
+  // A LONE begin marker (no matching end): a damaged managed file, NOT clean
+  // human prose. emitDraft's validation pass throws EmitRefusedError before any
+  // write happens — the write tool must turn that into isError content, not an
+  // uncaught crash, and must not touch the file. (An unmarked file, by contrast,
+  // now adopts pointer mode — see the test above.)
+  const original = "# Hand-authored AGENTS.md\n\n<!-- prlore:begin -->\nstray open marker, no close\n";
   await writeFile(join(repoPath, "AGENTS.md"), original, "utf8");
 
   const manager = new StubJobManager();
@@ -409,6 +453,7 @@ test("write against a target with a broken managed-block surfaces EmitRefusedErr
   const preview = JSON.parse(textOf(await client.callTool({ name: "preview", arguments: {} })));
   expect(preview.targetExists).toBe(true);
   expect(preview.wouldRefuse).toBe(true);
+  expect(preview.writePlan).toMatch(/refus/i);
 
   const writeRes = await client.callTool({ name: "write", arguments: { confirmToken: preview.confirmToken } });
   expect(writeRes.isError).toBe(true);

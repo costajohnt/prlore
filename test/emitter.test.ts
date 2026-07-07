@@ -75,22 +75,6 @@ test("managed-block replacement leaves surrounding human prose byte-identical", 
 
 // ---- refusal cases -------------------------------------------------------
 
-test("refuses when target has no markers at all; file untouched", async () => {
-  const repoPath = await tmpRepo();
-  const original = "# Human doc\n\nNo markers here.\n";
-  const path = join(repoPath, "AGENTS.md");
-  await writeFile(path, original, "utf8");
-  const before = await stat(path);
-
-  await expect(emitDraft("draft\n", mkProvenance(), { repoPath, target: "AGENTS.md", layout: "single" })).rejects.toThrow(
-    EmitRefusedError,
-  );
-
-  expect(await readFile(path, "utf8")).toBe(original);
-  const after = await stat(path);
-  expect(after.mtimeMs).toBe(before.mtimeMs);
-});
-
 test("refuses when begin marker is duplicated; file untouched", async () => {
   const repoPath = await tmpRepo();
   const original = `intro\n${BEGIN}\nfirst\n${END}\nmiddle\n${BEGIN}\nsecond\n${END}\nend\n`;
@@ -119,7 +103,9 @@ test("refuses when markers are reversed (end before begin); file untouched", asy
 
 test("refusal leaves the sidecar unwritten too — nothing written at all", async () => {
   const repoPath = await tmpRepo();
-  await writeFile(join(repoPath, "AGENTS.md"), "no markers\n", "utf8");
+  // A lone BEGIN (damaged managed file) genuinely refuses; an unmarked file
+  // now adopts pointer mode (see rule-4 tests below).
+  await writeFile(join(repoPath, "AGENTS.md"), `${BEGIN}\nlone begin, no end\n`, "utf8");
 
   await expect(emitDraft("draft\n", mkProvenance(), { repoPath, target: "AGENTS.md", layout: "single" })).rejects.toThrow(
     EmitRefusedError,
@@ -319,4 +305,207 @@ test("auto layout stays single when the draft is under BOTH the line and byte th
   await emitDraft(shortDraft, provenance, { repoPath, target: "AGENTS.md", layout: "auto" });
 
   await expect(stat(join(repoPath, "auth", "AGENTS.md"))).rejects.toThrow();
+});
+
+// ---- pointer mode: adaptive mode resolution (spec §Mode resolution) ---------
+
+const POINTER_LINK = "[.prlore/AGENTS.md](.prlore/AGENTS.md)";
+const POINTER_HEADING = "## Mined PR-review conventions";
+
+test("rule 4 — unmarked root file adopts pointer mode: full doc to .prlore/, pointer appended to root, prose byte-identical", async () => {
+  const repoPath = await tmpRepo();
+  const original = "# Human doc\n\nHand-written prose that must survive untouched.\n";
+  const rootPath = join(repoPath, "AGENTS.md");
+  await writeFile(rootPath, original, "utf8");
+
+  const result = await emitDraft("# Conventions\n\nMined body.\n", mkProvenance(), {
+    repoPath,
+    target: "AGENTS.md",
+    layout: "single",
+  });
+
+  // Root: human prose above the appended block is byte-for-byte identical.
+  const root = await readFile(rootPath, "utf8");
+  const beginIdx = root.indexOf(BEGIN);
+  expect(root.slice(0, beginIdx)).toBe(`${original}\n`); // original (ends with \n) + one blank-line separator
+  expect(root).toContain(POINTER_HEADING);
+  expect(root).toContain(POINTER_LINK);
+  expect(root).not.toContain("Mined body."); // full doc never lands in the human file
+
+  // Full mined doc lives under .prlore/, fresh-wrapped in markers.
+  const mined = await readFile(join(repoPath, ".prlore", "AGENTS.md"), "utf8");
+  expect(mined).toBe(`${BEGIN}\n# Conventions\n\nMined body.\n${END}\n`);
+
+  expect(result.pathsWritten).toEqual(
+    expect.arrayContaining([
+      rootPath,
+      join(repoPath, ".prlore", "AGENTS.md"),
+      join(repoPath, ".prlore", "provenance.json"),
+    ]),
+  );
+});
+
+test("rule 4 — pointer link interpolates a non-default --target name", async () => {
+  const repoPath = await tmpRepo();
+  await writeFile(join(repoPath, "CLAUDE.md"), "# human\n", "utf8");
+
+  await emitDraft("# Conventions\n\nbody\n", mkProvenance(), { repoPath, target: "CLAUDE.md", layout: "single" });
+
+  const root = await readFile(join(repoPath, "CLAUDE.md"), "utf8");
+  expect(root).toContain("[.prlore/CLAUDE.md](.prlore/CLAUDE.md)");
+  const mined = await readFile(join(repoPath, ".prlore", "CLAUDE.md"), "utf8");
+  expect(mined).toContain("body");
+});
+
+test("rule 1 — stickiness: re-run replaces the pointer block in place, never stomps the human file with the full draft", async () => {
+  const repoPath = await tmpRepo();
+  const original = "# My project\n\nHand-written stuff.\n";
+  const rootPath = join(repoPath, "AGENTS.md");
+  await writeFile(rootPath, original, "utf8");
+
+  // First run adopts pointer mode.
+  await emitDraft("# Conventions\n\nfirst draft body.\n", mkProvenance(), { repoPath, target: "AGENTS.md", layout: "single" });
+  const rootAfterAdopt = await readFile(rootPath, "utf8");
+
+  // Second run: .prlore/AGENTS.md now exists → rule 1 (sticky), NOT rule 3.
+  await emitDraft("# Conventions\n\nsecond draft body.\n", mkProvenance(), { repoPath, target: "AGENTS.md", layout: "single" });
+
+  const root = await readFile(rootPath, "utf8");
+  // Root pointer block replaced in place; human prose above byte-identical; the
+  // full draft never leaks into the root file.
+  expect(root.slice(0, root.indexOf(BEGIN))).toBe(`${original}\n`);
+  expect(root).toContain(POINTER_LINK);
+  expect(root).not.toContain("second draft body.");
+  // Exactly one managed block in the root (no silent conversion to direct mode).
+  expect(root.match(new RegExp(BEGIN.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&"), "g"))?.length).toBe(1);
+  expect(root).toBe(rootAfterAdopt); // pointer text is identical run-to-run
+
+  // The .prlore doc is updated to the new draft.
+  const mined = await readFile(join(repoPath, ".prlore", "AGENTS.md"), "utf8");
+  expect(mined).toContain("second draft body.");
+  expect(mined).not.toContain("first draft body.");
+});
+
+test("rule 1 — .prlore/AGENTS.md present but UNMARKED refuses (prlore owns that file); nothing written", async () => {
+  const repoPath = await tmpRepo();
+  const rootPath = join(repoPath, "AGENTS.md");
+  await writeFile(rootPath, "# human\n", "utf8");
+  await mkdir(join(repoPath, ".prlore"), { recursive: true });
+  const prloreDoc = join(repoPath, ".prlore", "AGENTS.md");
+  await writeFile(prloreDoc, "prlore-owned but somehow unmarked\n", "utf8");
+
+  await expect(
+    emitDraft("# Conventions\n\nbody\n", mkProvenance(), { repoPath, target: "AGENTS.md", layout: "single" }),
+  ).rejects.toThrow(EmitRefusedError);
+
+  // Nothing touched: the .prlore doc keeps its bytes, no pointer added to root,
+  // no sidecar written.
+  expect(await readFile(prloreDoc, "utf8")).toBe("prlore-owned but somehow unmarked\n");
+  expect(await readFile(rootPath, "utf8")).toBe("# human\n");
+  await expect(stat(join(repoPath, ".prlore", "provenance.json"))).rejects.toThrow();
+});
+
+test("lone BEGIN marker in root refuses (not adoption); file untouched", async () => {
+  const repoPath = await tmpRepo();
+  const original = `# doc\n\n${BEGIN}\ndangling begin, no end\n`;
+  const path = join(repoPath, "AGENTS.md");
+  await writeFile(path, original, "utf8");
+
+  await expect(
+    emitDraft("draft\n", mkProvenance(), { repoPath, target: "AGENTS.md", layout: "single" }),
+  ).rejects.toThrow(EmitRefusedError);
+
+  expect(await readFile(path, "utf8")).toBe(original);
+  await expect(stat(join(repoPath, ".prlore", "AGENTS.md"))).rejects.toThrow();
+});
+
+test("lone END marker in root refuses (not adoption); file untouched", async () => {
+  const repoPath = await tmpRepo();
+  const original = `# doc\n\n${END}\ndangling end, no begin\n`;
+  const path = join(repoPath, "AGENTS.md");
+  await writeFile(path, original, "utf8");
+
+  await expect(
+    emitDraft("draft\n", mkProvenance(), { repoPath, target: "AGENTS.md", layout: "single" }),
+  ).rejects.toThrow(EmitRefusedError);
+
+  expect(await readFile(path, "utf8")).toBe(original);
+  await expect(stat(join(repoPath, ".prlore", "AGENTS.md"))).rejects.toThrow();
+});
+
+test("pointer mode per-area: root doc + area files land under .prlore/, no <area>/AGENTS.md at repo root", async () => {
+  const repoPath = await tmpRepo();
+  const rootPath = join(repoPath, "AGENTS.md");
+  await writeFile(rootPath, "# human\n\nprose.\n", "utf8"); // unmarked → pointer adoption
+  await mkdir(join(repoPath, "auth"), { recursive: true });
+  await mkdir(join(repoPath, "webapp"), { recursive: true });
+
+  const authRule = mkRule({ id: "a1", statement: "Hash passwords with bcrypt", scope: ["auth/login.ts"] });
+  const webappRule = mkRule({ id: "w1", statement: "Use functional components", scope: ["webapp"] });
+  const provenance = mkProvenance([authRule, webappRule]);
+
+  const result = await emitDraft("# Conventions\n\nFull body.\n", provenance, {
+    repoPath,
+    target: "AGENTS.md",
+    layout: "per-area",
+  });
+
+  // Root only gets the pointer block.
+  const root = await readFile(rootPath, "utf8");
+  expect(root).toContain(POINTER_LINK);
+  expect(root).not.toContain("Full body.");
+
+  // Full mined doc under .prlore/ with area links relative to .prlore/.
+  const mined = await readFile(join(repoPath, ".prlore", "AGENTS.md"), "utf8");
+  expect(mined).toContain("Full body.");
+  expect(mined).toContain("[auth](areas/auth.md)");
+  expect(mined).toContain("[webapp](areas/webapp.md)");
+
+  // Area files under .prlore/areas/, backlink to ../AGENTS.md (== .prlore/AGENTS.md).
+  const authStub = await readFile(join(repoPath, ".prlore", "areas", "auth.md"), "utf8");
+  expect(authStub).toContain("# Conventions for auth");
+  expect(authStub).toContain("Hash passwords with bcrypt");
+  expect(authStub).toContain("(../AGENTS.md)");
+  expect(authStub).not.toContain("Use functional components");
+
+  // No stubs written at repo root.
+  await expect(stat(join(repoPath, "auth", "AGENTS.md"))).rejects.toThrow();
+  await expect(stat(join(repoPath, "webapp", "AGENTS.md"))).rejects.toThrow();
+
+  expect(result.pathsWritten).toEqual(
+    expect.arrayContaining([
+      rootPath,
+      join(repoPath, ".prlore", "AGENTS.md"),
+      join(repoPath, ".prlore", "areas", "auth.md"),
+      join(repoPath, ".prlore", "areas", "webapp.md"),
+      join(repoPath, ".prlore", "provenance.json"),
+    ]),
+  );
+});
+
+test("pointer mode all-or-nothing: one refusing area target leaves every file (including root + sidecar) untouched", async () => {
+  const repoPath = await tmpRepo();
+  const rootPath = join(repoPath, "AGENTS.md");
+  const original = "# human\n\nprose.\n";
+  await writeFile(rootPath, original, "utf8"); // unmarked → pointer adoption
+  await mkdir(join(repoPath, "auth"), { recursive: true });
+  // Pre-seed the area file prlore would write with a damaged managed block so
+  // computing its content refuses.
+  const areaFile = join(repoPath, ".prlore", "areas", "auth.md");
+  await mkdir(join(repoPath, ".prlore", "areas"), { recursive: true });
+  await writeFile(areaFile, "corrupt: no markers here\n", "utf8");
+
+  const authRule = mkRule({ id: "a1", statement: "Hash passwords with bcrypt", scope: ["auth/login.ts"] });
+  const provenance = mkProvenance([authRule]);
+
+  await expect(
+    emitDraft("# Conventions\n\nFull body.\n", provenance, { repoPath, target: "AGENTS.md", layout: "per-area" }),
+  ).rejects.toThrow(EmitRefusedError);
+
+  // Nothing written: root untouched, no pointer added, no .prlore/AGENTS.md,
+  // area file unchanged, no sidecar.
+  expect(await readFile(rootPath, "utf8")).toBe(original);
+  expect(await readFile(areaFile, "utf8")).toBe("corrupt: no markers here\n");
+  await expect(stat(join(repoPath, ".prlore", "AGENTS.md"))).rejects.toThrow();
+  await expect(stat(join(repoPath, ".prlore", "provenance.json"))).rejects.toThrow();
 });
