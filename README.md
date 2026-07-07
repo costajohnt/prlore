@@ -27,7 +27,10 @@ This runs the mining pipeline in-process: it starts the job, polls progress to
 stderr every 5 seconds, then once the draft is ready prints it to stdout along
 with any contested rules (listed on stderr — v1's CLI never auto-resolves
 them; use the MCP `write` tool's `resolveContested`, or edit the file by hand,
-to keep one). It then asks `Write AGENTS.md? [y/N]` before touching disk.
+to keep one). It then asks before touching disk: `Write AGENTS.md? [y/N]` when
+it will write the target directly, or `Write .prlore/AGENTS.md and add a pointer
+block to AGENTS.md? [y/N]` when an existing hand-authored AGENTS.md means it
+adopts pointer mode instead (see "Adaptive pointer mode" below).
 
 ```
 usage: prlore mine <owner/repo> [options]
@@ -57,8 +60,10 @@ usage: prlore mine <owner/repo> [options]
 
 Exit codes: `0` on success (including a confirmed-no / `--dry-run` "not
 written" outcome), `1` if the mining job itself failed or the write was
-refused (e.g. a target file with a corrupt managed-block marker pair), `2` for
-a usage or configuration error (bad flags, invalid `MineConfig`, no model
+refused (a target file whose managed block is damaged: a corrupt/reversed
+marker pair, or a lone stray marker. An existing file with no prlore markers is
+not a refusal; it adopts pointer mode, see "Adaptive pointer mode" below), `2`
+for a usage or configuration error (bad flags, invalid `MineConfig`, no model
 provider available).
 
 The CLI draws model calls from whichever provider `--provider`/`model.model`
@@ -88,6 +93,34 @@ prlore mine owner/repo --author yourlogin --days 730
 case-insensitively. When `--author` is given and `--intent` isn't, the
 default intent switches from the general onboarding phrasing to documenting
 the review feedback these authors received.
+
+### Adaptive pointer mode
+
+prlore never rewrites hand-authored prose. How it writes the mined conventions
+depends on the target file's existing state, chosen automatically from what's on
+disk (there is no flag):
+
+- **Direct mode** (target absent, or already prlore-managed with a valid marker
+  pair). The full mined doc goes straight into `AGENTS.md`, inside a
+  `<!-- prlore:begin -->` / `<!-- prlore:end -->` block. Bytes outside that block
+  are preserved exactly. This is the original behavior and is unchanged.
+- **Pointer mode** (an existing `AGENTS.md` that prlore doesn't manage, i.e. one
+  with no prlore markers). The full mined doc lands in a separate, prlore-owned
+  file, `.prlore/AGENTS.md`, and your existing `AGENTS.md` is only ever appended
+  to with a small managed pointer block (markers plus a one-line "the mined
+  conventions live in .prlore/AGENTS.md, read that first" note). The prose you
+  wrote above that block stays byte-for-byte identical, and re-running `mine`
+  replaces just the pointer block in place. prlore also enters pointer mode
+  whenever `.prlore/AGENTS.md` already exists, so once a repo adopts it the
+  layout stays put.
+
+With a non-default `--target`, the same rule applies with that filename
+substituted throughout (`.prlore/<target>`, and the pointer references
+`.prlore/<target>`).
+
+Pointer mode is exactly the case that used to refuse. An existing unmarked
+`AGENTS.md` is now adopted, not rejected (see the exit-code note above for what
+still refuses).
 
 ### As an MCP server
 
@@ -186,9 +219,12 @@ script-built fixture git repo.
   not fetch or shallow-clone the repo itself.
 - **Managed-block emission only.** prlore writes into a fenced
   `<!-- prlore:begin -->` / `<!-- prlore:end -->` block (or a fresh file if the
-  target doesn't exist). It refuses to touch a target file that has no valid
-  marker pair rather than attempting a free-form merge into hand-written
-  prose.
+  target doesn't exist). It never merges into hand-written prose: an existing
+  unmarked `AGENTS.md` is adopted via pointer mode (the mined doc goes to
+  `.prlore/AGENTS.md` and only a small pointer block is appended to the human
+  file, see "Adaptive pointer mode"), and a target whose managed block is
+  damaged (a corrupt/reversed pair or a lone stray marker) is refused rather
+  than guessed at.
 - **No incremental UI.** There's no diff view, no partial-accept-per-rule flow
   beyond the contested-item keep/drop list `write` accepts. Re-running `mine`
   re-synthesizes over the (cached) extraction corpus.

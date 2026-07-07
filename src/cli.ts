@@ -4,6 +4,7 @@ import type { Writable } from "node:stream";
 import { z, ZodError } from "zod";
 import { emitDraft, EmitRefusedError, type EmitTarget } from "./emitter/emit.js";
 import { finalizeDraft } from "./emitter/finalize.js";
+import { confirmWriteQuestion, previewEmitMode } from "./emitter/mode.js";
 import { JobManager, type JobDeps, type JobManagerApi } from "./jobs/manager.js";
 import type { JobStatus } from "./jobs/registry.js";
 import { MineConfigSchema, type MineConfig } from "./schemas/mine-config.js";
@@ -295,7 +296,18 @@ export async function runMineCli(argv: string[], deps: CliDeps): Promise<number>
     return 0;
   }
 
-  const shouldWrite = parsed.yes ? true : await deps.confirm(`Write ${config.output.target}?`);
+  // Name what will actually be written given the resolved mode: pointer mode
+  // (an unmarked human <target> exists, or the repo already adopted it) writes
+  // the full doc to .prlore/<target> and only appends a pointer block to the
+  // human file; direct mode writes <target> itself. Read-only, shares the exact
+  // detection the MCP preview uses so the two can't drift.
+  let shouldWrite: boolean;
+  if (parsed.yes) {
+    shouldWrite = true;
+  } else {
+    const modePreview = await previewEmitMode(repoPath, config.output.target);
+    shouldWrite = await deps.confirm(confirmWriteQuestion(modePreview.mode, config.output.target));
+  }
   if (!shouldWrite) {
     deps.stderr.write("not written\n");
     return 0;

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -428,6 +428,60 @@ test("happy flow: polls to ready, prints preview, writes after confirm=true, exi
 
   // progress line(s) went to stderr
   expect(err()).toMatch(/fetching/);
+});
+
+test("direct-mode confirm prompt names the target file only (no root AGENTS.md → direct mode)", async () => {
+  const repoPath = await tmpRepo();
+  const manager = new ScriptedJobManager([readyStatus()], { draft: mkDraft([]), provenance: mkProvenance([mkRule()]), contested: [] });
+  const { stdout, stderr } = streams();
+  const confirm = vi.fn(async () => true);
+
+  const code = await runMineCli(baseArgv("octo/repo", repoPath), {
+    makeDeps,
+    manager,
+    stdout,
+    stderr,
+    confirm,
+    pollIntervalMs: 0,
+  });
+
+  expect(code).toBe(0);
+  const question = confirm.mock.calls[0]![0];
+  expect(question).toBe("Write AGENTS.md?");
+});
+
+test("pointer-mode confirm prompt names .prlore/AGENTS.md and the appended pointer block", async () => {
+  const repoPath = await tmpRepo();
+  // An existing unmarked human AGENTS.md → pointer mode: the prompt must say the
+  // full doc goes to .prlore/AGENTS.md and only a pointer block is added to the
+  // human file, not the misleading direct-mode "Write AGENTS.md?".
+  await writeFile(join(repoPath, "AGENTS.md"), "# Hand-authored\n\nsome prose\n", "utf8");
+  const manager = new ScriptedJobManager([readyStatus()], { draft: mkDraft([]), provenance: mkProvenance([mkRule()]), contested: [] });
+  const { stdout, stderr } = streams();
+  const confirm = vi.fn(async () => true);
+
+  const code = await runMineCli(baseArgv("octo/repo", repoPath), {
+    makeDeps,
+    manager,
+    stdout,
+    stderr,
+    confirm,
+    pollIntervalMs: 0,
+  });
+
+  expect(code).toBe(0);
+  const question = confirm.mock.calls[0]![0];
+  expect(question).toMatch(/\.prlore\/AGENTS\.md/);
+  expect(question).toMatch(/pointer block/i);
+  expect(question).toMatch(/^Write /);
+
+  // And the write actually adopted pointer mode: full doc under .prlore/, human
+  // prose preserved above the appended pointer block.
+  const humanFile = await readFile(join(repoPath, "AGENTS.md"), "utf8");
+  expect(humanFile.startsWith("# Hand-authored\n\nsome prose\n")).toBe(true);
+  expect(humanFile).toContain(".prlore/AGENTS.md");
+  const prloreDoc = await readFile(join(repoPath, ".prlore", "AGENTS.md"), "utf8");
+  expect(prloreDoc).toContain("Always write tests first");
 });
 
 test("confirm=false -> emitDraft is never called, exit 0, output says not written", async () => {
