@@ -89,7 +89,13 @@ export class ClaudeCliProvider implements ModelProvider {
         throw new Error(`claude CLI exited with code ${exitCode}: ${excerpt}`);
       }
 
-      const envelope = JSON.parse(stdout) as ClaudeCliEnvelope;
+      let envelope: ClaudeCliEnvelope;
+      try {
+        envelope = JSON.parse(stdout) as ClaudeCliEnvelope;
+      } catch {
+        const excerpt = stdout.slice(0, STDERR_EXCERPT_LEN);
+        throw new Error(`claude CLI returned non-JSON output: ${excerpt}`);
+      }
       const rawCost = envelope.total_cost_usd;
       const validCost = typeof rawCost === "number" && Number.isFinite(rawCost) && rawCost >= 0;
       if (!validCost) {
@@ -172,6 +178,11 @@ function spawnClaude(
       resolve({ stdout, exitCode: code ?? -1, stderr });
     });
 
+    // If the CLI exits before reading the whole prompt (auth failure, bad
+    // flag), the write fails with EPIPE. Without a listener that error is
+    // uncaught and kills the process; swallow it here so the close handler
+    // reports the exit code and stderr instead.
+    child.stdin.on("error", () => {});
     child.stdin.write(input);
     child.stdin.end();
   });
