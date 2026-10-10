@@ -1,0 +1,60 @@
+name: Release Please
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    name: Release Please
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  publish:
+    name: Publish prlore to npm
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout tagged release
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: 'https://registry.npmjs.org'
+
+      # npm trusted publishing (OIDC): the job's id-token mints the publish
+      # credential, so no long-lived NPM_TOKEN secret is needed. Requires the
+      # trusted publisher (repo costajohnt/prlore, workflow release-please.yml)
+      # to be registered on npmjs.com, and npm >= 11.5.1.
+      - name: Upgrade npm for trusted publishing
+        run: npm install -g npm@latest && npm --version
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+      # prepublishOnly runs the build.
+      - name: Publish
+        run: npm publish --provenance --access public
