@@ -509,3 +509,21 @@ test("pointer mode all-or-nothing: one refusing area target leaves every file (i
   await expect(stat(join(repoPath, ".prlore", "AGENTS.md"))).rejects.toThrow();
   await expect(stat(join(repoPath, ".prlore", "provenance.json"))).rejects.toThrow();
 });
+
+// ---- target confinement --------------------------------------------------
+
+test("emitDraft refuses a target that resolves outside the repo and writes nothing", async () => {
+  const parent = await tmpRepo();
+  const repo = join(parent, "repo");
+  await mkdir(repo);
+  await writeFile(join(parent, "victimrc"), "export FOO=1\n");
+  for (const target of ["../outside.md", "../victimrc", ".prlore/../../x.md"]) {
+    await expect(
+      emitDraft("# Conventions\n", mkProvenance(), { repoPath: repo, target, layout: "single" }),
+      target,
+    ).rejects.toThrow(/outside the repository/);
+  }
+  await expect(stat(join(parent, "outside.md"))).rejects.toThrow();
+  expect(await readFile(join(parent, "victimrc"), "utf8")).toBe("export FOO=1\n");
+  await expect(stat(join(repo, ".prlore"))).rejects.toThrow();
+});

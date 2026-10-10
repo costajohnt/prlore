@@ -271,6 +271,14 @@ export async function emitDraft(
   const prloreTargetPath = join(repoPath, ".prlore", target);
   const sidecarPath = join(repoPath, ".prlore", "provenance.json");
 
+  // MineConfigSchema already rejects targets with path separators or "..";
+  // this is the independent second gate (as areas get), since emitDraft is
+  // also reachable with a hand-built EmitTarget.
+  const prloreDir = join(repoPath, ".prlore");
+  if (!isInsideRepo(repoPath, rootPath) || !isInsideRepo(prloreDir, prloreTargetPath)) {
+    throw new Error(`refusing to write target "${target}": it resolves outside the repository`);
+  }
+
   const mode = await resolveMode(rootPath, prloreTargetPath);
 
   // Second, independent gate (see isInsideRepo doc comment): drop — never
