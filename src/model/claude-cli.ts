@@ -1,4 +1,7 @@
 import { spawn } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { extractJson } from "./anthropic.js";
 import { BudgetExceededError, type CompleteOptions, type ModelProvider } from "./provider.js";
 import { appendSchemaHint } from "./schema-hint.js";
@@ -25,6 +28,22 @@ export type RunCli = (
   input: string,
   timeoutMs: number,
 ) => Promise<{ stdout: string; exitCode: number; stderr: string }>;
+
+/**
+ * prlore only needs a JSON completion, and the prompt carries untrusted text
+ * (third-party PR review comments, files from the mined repo). These flags
+ * keep the headless session inert: no built-in tools, no MCP servers, and no
+ * project or local settings (hooks, permissions) from whatever directory the
+ * CLI would otherwise treat as the project. The child also runs in a fresh
+ * empty temp dir (see defaultRunCli) so the mined clone is never its project.
+ */
+export const CLAUDE_CLI_ISOLATION_ARGS: readonly string[] = [
+  "--tools",
+  "",
+  "--strict-mcp-config",
+  "--setting-sources",
+  "user",
+];
 
 interface ClaudeCliEnvelope {
   result?: unknown;
@@ -59,7 +78,7 @@ export class ClaudeCliProvider implements ModelProvider {
           : `${prompt}\n\nYour previous reply was invalid: ${lastError}\nReply with ONLY valid JSON matching the requested shape.`;
       const input = appendSchemaHint(baseInput, schema);
 
-      const args = ["-p", "--output-format", "json"];
+      const args = ["-p", "--output-format", "json", ...CLAUDE_CLI_ISOLATION_ARGS];
       if (this.opts.model) args.push("--model", this.opts.model);
       if (system) args.push("--system-prompt", system);
 
@@ -100,13 +119,29 @@ export class ClaudeCliProvider implements ModelProvider {
   }
 }
 
-function defaultRunCli(
+async function defaultRunCli(
   args: string[],
   input: string,
   timeoutMs: number,
 ): Promise<{ stdout: string; exitCode: number; stderr: string }> {
+  // Never inherit process.cwd(): for `prlore mine` that is usually the clone
+  // being mined, whose .claude/ settings and CLAUDE.md must not be loaded.
+  const cwd = await mkdtemp(join(tmpdir(), "prlore-claude-"));
+  try {
+    return await spawnClaude(args, input, timeoutMs, cwd);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+}
+
+function spawnClaude(
+  args: string[],
+  input: string,
+  timeoutMs: number,
+  cwd: string,
+): Promise<{ stdout: string; exitCode: number; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn("claude", args, { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn("claude", args, { cwd, stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     let settled = false;

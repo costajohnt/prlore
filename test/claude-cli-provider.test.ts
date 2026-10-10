@@ -173,3 +173,49 @@ test("negative total_cost_usd books 0 and fires onWarn, maintains monotonicity",
   expect(p.spentUsd()).toBe(0);
   expect(onWarn).toHaveBeenCalledTimes(1);
 });
+
+test("headless invocation disables tools, MCP servers and project settings", async () => {
+  const run = fakeRunCli([{ result: '{"answer":"yes"}', total_cost_usd: 0 }]);
+  const p = new ClaudeCliProvider({ maxBudgetUsd: 10, model: "sonnet" }, run as unknown as RunCli);
+  await p.complete({ prompt: "q", system: "be terse", schema });
+  const [args] = run.mock.calls[0]!;
+  const toolsAt = args.indexOf("--tools");
+  expect(toolsAt).toBeGreaterThan(-1);
+  expect(args[toolsAt + 1]).toBe("");
+  expect(args).toContain("--strict-mcp-config");
+  const sourcesAt = args.indexOf("--setting-sources");
+  expect(sourcesAt).toBeGreaterThan(-1);
+  expect(args[sourcesAt + 1]).toBe("user");
+});
+
+test.skipIf(process.platform === "win32")(
+  "default runner spawns claude in a fresh temp dir, not process.cwd()",
+  async () => {
+    const { mkdtemp, writeFile, chmod, rm, realpath } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join, delimiter } = await import("node:path");
+    const { existsSync } = await import("node:fs");
+
+    // A stand-in `claude` that reports the directory it was started in.
+    const binDir = await mkdtemp(join(tmpdir(), "prlore-fake-claude-"));
+    const script = join(binDir, "claude");
+    await writeFile(
+      script,
+      '#!/bin/sh\ncat >/dev/null\nprintf \'{"result":"{\\\\"answer\\\\":\\\\"%s\\\\"}","total_cost_usd":0}\' "$(pwd -P)"\n',
+    );
+    await chmod(script, 0o755);
+    const oldPath = process.env.PATH;
+    process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
+    try {
+      const p = new ClaudeCliProvider({ maxBudgetUsd: 10 });
+      const { answer } = await p.complete({ prompt: "q", schema });
+      expect(answer).not.toBe(await realpath(process.cwd()));
+      expect(answer).toContain("prlore-claude-");
+      // the temp dir is removed after the call
+      expect(existsSync(answer)).toBe(false);
+    } finally {
+      process.env.PATH = oldPath;
+      await rm(binDir, { recursive: true, force: true });
+    }
+  },
+);
