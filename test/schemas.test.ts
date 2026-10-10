@@ -92,3 +92,16 @@ test("MineConfig rejects a zero or negative output.maxRules", () => {
 test("MineConfig rejects a non-integer output.maxRules", () => {
   expect(() => MineConfigSchema.parse({ repo: "owner/name", intent: "x", output: { maxRules: 1.5 } })).toThrow();
 });
+
+test("MineConfig output.target accepts plain filenames", () => {
+  for (const target of ["AGENTS.md", "CLAUDE.md", ".cursorrules"]) {
+    const c = MineConfigSchema.parse({ repo: "o/r", intent: "x", output: { target } });
+    expect(c.output.target).toBe(target);
+  }
+});
+
+test("MineConfig output.target rejects paths that could escape the repo", () => {
+  for (const target of ["../x", "/abs/AGENTS.md", ".prlore/../x", "..", ".", "sub/AGENTS.md", "..\\x", "C:x", ""]) {
+    expect(() => MineConfigSchema.parse({ repo: "o/r", intent: "x", output: { target } }), target).toThrow();
+  }
+});

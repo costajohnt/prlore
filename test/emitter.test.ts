@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
@@ -508,4 +508,61 @@ test("pointer mode all-or-nothing: one refusing area target leaves every file (i
   expect(await readFile(areaFile, "utf8")).toBe("corrupt: no markers here\n");
   await expect(stat(join(repoPath, ".prlore", "AGENTS.md"))).rejects.toThrow();
   await expect(stat(join(repoPath, ".prlore", "provenance.json"))).rejects.toThrow();
+});
+
+// ---- target confinement --------------------------------------------------
+
+test("emitDraft refuses a target that resolves outside the repo and writes nothing", async () => {
+  const parent = await tmpRepo();
+  const repo = join(parent, "repo");
+  await mkdir(repo);
+  await writeFile(join(parent, "victimrc"), "export FOO=1\n");
+  for (const target of ["../outside.md", "../victimrc", ".prlore/../../x.md"]) {
+    await expect(
+      emitDraft("# Conventions\n", mkProvenance(), { repoPath: repo, target, layout: "single" }),
+      target,
+    ).rejects.toThrow(/outside the repository/);
+  }
+  await expect(stat(join(parent, "outside.md"))).rejects.toThrow();
+  expect(await readFile(join(parent, "victimrc"), "utf8")).toBe("export FOO=1\n");
+  await expect(stat(join(repo, ".prlore"))).rejects.toThrow();
+});
+
+test("emitDraft refuses to follow a symlinked .prlore dir or root target out of the repo", async () => {
+  const parent = await tmpRepo();
+  const outside = join(parent, "outside");
+  await mkdir(outside);
+
+  const repoA = join(parent, "a");
+  await mkdir(repoA);
+  await symlink(outside, join(repoA, ".prlore"));
+  await expect(
+    emitDraft("# Conventions\n", mkProvenance(), { repoPath: repoA, target: "AGENTS.md", layout: "single" }),
+  ).rejects.toThrow(/symlink or resolves outside/);
+
+  const repoB = join(parent, "b");
+  await mkdir(repoB);
+  await writeFile(join(outside, "victimrc"), "export FOO=1\n");
+  await symlink(join(outside, "victimrc"), join(repoB, "AGENTS.md"));
+  await expect(
+    emitDraft("# Conventions\n", mkProvenance(), { repoPath: repoB, target: "AGENTS.md", layout: "single" }),
+  ).rejects.toThrow(/symlink or resolves outside/);
+
+  expect(await readdir(outside)).toEqual(["victimrc"]);
+  expect(await readFile(join(outside, "victimrc"), "utf8")).toBe("export FOO=1\n");
+  await expect(stat(join(repoB, ".prlore"))).rejects.toThrow();
+});
+
+test("per-area layout skips an area directory that is a symlink out of the repo", async () => {
+  const parent = await tmpRepo();
+  const outside = join(parent, "outside");
+  await mkdir(outside);
+  const repo = join(parent, "repo");
+  await mkdir(join(repo, "src"), { recursive: true });
+  await symlink(outside, join(repo, "lib"));
+  const rules = [mkRule({ id: "1", scope: ["src/a.ts"] }), mkRule({ id: "2", scope: ["lib/b.ts"] })];
+  const result = await emitDraft("# Conventions\n", mkProvenance(rules), { repoPath: repo, target: "AGENTS.md", layout: "per-area" });
+  expect(result.pathsWritten).toContain(join(repo, "src", "AGENTS.md"));
+  expect(result.pathsWritten).not.toContain(join(repo, "lib", "AGENTS.md"));
+  expect(await readdir(outside)).toEqual([]);
 });

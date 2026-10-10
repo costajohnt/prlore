@@ -1,5 +1,5 @@
-import { readFile, stat } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { lstat, readFile, realpath, stat } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { BEGIN, checkMarkers, END, isMarkerIssue, sanitize } from "./markers.js";
 import type { Provenance, RuleRecord } from "../schemas/provenance.js";
 import { atomicWriteFile } from "../state/atomic.js";
@@ -191,6 +191,32 @@ function isInsideRepo(repoPath: string, candidatePath: string): boolean {
   return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
+// On-disk counterpart to isInsideRepo, which only checks the path string. A
+// repo can contain symlinks (a `.prlore` or area directory pointing elsewhere,
+// or a root target that is itself a link), so before anything under the repo
+// is read or written, confirm that the nearest existing ancestor really lives
+// inside the repo and that the file itself, if present, is not a symlink.
+async function isConfinedOnDisk(repoPath: string, candidatePath: string): Promise<boolean> {
+  try {
+    if ((await lstat(candidatePath)).isSymbolicLink()) return false;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  const repoReal = await realpath(repoPath);
+  let dir = dirname(resolve(candidatePath));
+  for (;;) {
+    try {
+      const rel = relative(repoReal, await realpath(dir));
+      return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      const parent = dirname(dir);
+      if (parent === dir) return false;
+      dir = parent;
+    }
+  }
+}
+
 async function existingDirs(repoPath: string, candidates: string[]): Promise<string[]> {
   const out: string[] = [];
   for (const candidate of candidates) {
@@ -271,6 +297,19 @@ export async function emitDraft(
   const prloreTargetPath = join(repoPath, ".prlore", target);
   const sidecarPath = join(repoPath, ".prlore", "provenance.json");
 
+  // MineConfigSchema already rejects targets with path separators or "..";
+  // this is the independent second gate (as areas get), since emitDraft is
+  // also reachable with a hand-built EmitTarget.
+  const prloreDir = join(repoPath, ".prlore");
+  if (!isInsideRepo(repoPath, rootPath) || !isInsideRepo(prloreDir, prloreTargetPath)) {
+    throw new Error(`refusing to write target "${target}": it resolves outside the repository`);
+  }
+  for (const p of [rootPath, prloreTargetPath, sidecarPath]) {
+    if (!(await isConfinedOnDisk(repoPath, p))) {
+      throw new Error(`refusing to write ${p}: it is a symlink or resolves outside the repository`);
+    }
+  }
+
   const mode = await resolveMode(rootPath, prloreTargetPath);
 
   // Second, independent gate (see isInsideRepo doc comment): drop — never
@@ -280,7 +319,12 @@ export async function emitDraft(
   const resolveAreas = async (stubPathFor: (area: string) => string): Promise<string[]> => {
     const segments = areaFirstSegments(provenance.rules);
     const candidateAreas = await existingDirs(repoPath, segments);
-    return candidateAreas.filter((area) => isInsideRepo(repoPath, stubPathFor(area)));
+    const confined: string[] = [];
+    for (const area of candidateAreas) {
+      const stub = stubPathFor(area);
+      if (isInsideRepo(repoPath, stub) && (await isConfinedOnDisk(repoPath, stub))) confined.push(area);
+    }
+    return confined;
   };
 
   // Build the plan of managed-block targets for the resolved mode. Each entry's

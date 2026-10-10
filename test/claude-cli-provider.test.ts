@@ -1,4 +1,7 @@
 import { expect, test, vi } from "vitest";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import { z } from "zod";
 import { ClaudeCliProvider, type RunCli } from "../src/model/claude-cli.js";
 import { BudgetExceededError } from "../src/model/provider.js";
@@ -213,6 +216,38 @@ test.skipIf(process.platform === "win32")(
       expect(answer).toContain("prlore-claude-");
       // the temp dir is removed after the call
       expect(existsSync(answer)).toBe(false);
+    } finally {
+      process.env.PATH = oldPath;
+      await rm(binDir, { recursive: true, force: true });
+    }
+  },
+);
+
+test("non-JSON stdout on a zero exit rejects with a clear message", async () => {
+  const run = vi.fn(async () => ({ stdout: "Welcome to Claude", exitCode: 0, stderr: "" }));
+  const p = new ClaudeCliProvider({ maxBudgetUsd: 10 }, run as unknown as RunCli);
+  await expect(p.complete({ prompt: "q", schema })).rejects.toThrow(
+    "claude CLI returned non-JSON output: Welcome to Claude",
+  );
+});
+
+test.skipIf(process.platform === "win32")(
+  "a claude CLI that exits before reading a large prompt rejects instead of crashing on EPIPE",
+  async () => {
+    const binDir = await mkdtemp(join(tmpdir(), "prlore-fake-claude-"));
+    const fake = join(binDir, "claude");
+    await writeFile(fake, "#!/bin/sh\necho 'auth failed' >&2\nexit 1\n");
+    await chmod(fake, 0o755);
+    const oldPath = process.env.PATH;
+    process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
+    try {
+      const p = new ClaudeCliProvider({ maxBudgetUsd: 10 });
+      // Well past the 64 KiB pipe buffer, so the write is still pending when
+      // the child exits.
+      const prompt = "x".repeat(2 * 1024 * 1024);
+      await expect(p.complete({ prompt, schema })).rejects.toThrow(
+        "claude CLI exited with code 1: auth failed",
+      );
     } finally {
       process.env.PATH = oldPath;
       await rm(binDir, { recursive: true, force: true });

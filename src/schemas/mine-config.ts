@@ -17,7 +17,17 @@ export const MineConfigSchema = z.object({
     .prefault({}),
   output: z
     .object({
-      target: z.string().default("AGENTS.md"),
+      // A plain filename written at the repo root (and under .prlore/). Path
+      // separators, "." / "..", and absolute paths are rejected so a target
+      // can never point outside the checkout; emitDraft re-checks the
+      // resolved paths independently.
+      target: z
+        .string()
+        .min(1)
+        .refine((t) => t !== "." && t !== ".." && !/[\\/]/.test(t) && !/^[A-Za-z]:/.test(t), {
+          message: "target must be a plain filename (no path separators, '.', or '..')",
+        })
+        .default("AGENTS.md"),
       layout: z.enum(["single", "per-area", "auto"]).default("auto"),
       citations: z.enum(["inline-light", "sidecar-only"]).default("inline-light"),
       // v0.3 Task 4: the top maxRules (by score, which is already the sort order
