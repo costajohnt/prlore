@@ -10,6 +10,8 @@ export interface CompleteOptions<T> {
 export interface ModelProvider {
   complete<T>(opts: CompleteOptions<T>): Promise<T>;
   spentUsd(): number;
+  /** The budget cap this provider enforces, when it has one. */
+  capUsd?(): number;
 }
 
 export class BudgetExceededError extends Error {

@@ -3,7 +3,7 @@ import { AnthropicProvider } from "./anthropic.js";
 import { ClaudeCliProvider } from "./claude-cli.js";
 import { OpenAICompatibleProvider } from "./openai-compatible.js";
 import type { ModelProvider } from "./provider.js";
-import type { MineConfig } from "../schemas/mine-config.js";
+import { DEFAULT_MAX_BUDGET_USD, type MineConfig } from "../schemas/mine-config.js";
 
 /**
  * Real "is the `claude` CLI on PATH" probe: `which`/`command -v` equivalent via a
@@ -34,6 +34,8 @@ export function selectProvider(
   hasClaudeCliFn: () => boolean,
   onNotice: (msg: string) => void,
 ): ModelProvider {
+  const paidBudgetUsd = config.maxBudgetUsd ?? DEFAULT_MAX_BUDGET_USD;
+
   const buildAnthropic = (): ModelProvider => {
     // Fail fast, before touching the SDK: `new Anthropic()` does NOT throw at
     // construction time when no key is resolvable (verified against
@@ -47,11 +49,16 @@ export function selectProvider(
         'model.provider "anthropic" requires ANTHROPIC_API_KEY to be set — export it, or set model.provider to "claude-cli" to use the local Claude Code CLI instead',
       );
     }
-    return new AnthropicProvider({ model: config.model, maxBudgetUsd: config.maxBudgetUsd });
+    return new AnthropicProvider({ model: config.model, maxBudgetUsd: paidBudgetUsd });
   };
 
   const buildClaudeCli = (): ModelProvider =>
-    new ClaudeCliProvider({ model: config.model, maxBudgetUsd: config.maxBudgetUsd, onWarn: onNotice });
+    new ClaudeCliProvider({
+      model: config.model,
+      // Subscription usage, not billed: only capped when a budget is set explicitly.
+      maxBudgetUsd: config.maxBudgetUsd ?? Number.POSITIVE_INFINITY,
+      onWarn: onNotice,
+    });
 
   const GITHUB_MODELS_BASE = "https://models.github.ai/inference";
 
@@ -64,7 +71,7 @@ export function selectProvider(
       baseUrl: o.baseUrl,
       apiKey: o.apiKey,
       model: o.model,
-      maxBudgetUsd: config.maxBudgetUsd,
+      maxBudgetUsd: paidBudgetUsd,
       onWarn: onNotice,
       // pricePerMTok intentionally omitted: these endpoints are free-tier or
       // arbitrary, so cost tracking is disabled and --max-budget won't gate them.

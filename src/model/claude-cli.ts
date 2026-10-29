@@ -65,6 +65,10 @@ export class ClaudeCliProvider implements ModelProvider {
     return this.spent;
   }
 
+  capUsd(): number {
+    return this.opts.maxBudgetUsd;
+  }
+
   async complete<T>({ system, prompt, schema }: CompleteOptions<T>): Promise<T> {
     let lastError = "";
     for (let attempt = 0; attempt < 2; attempt++) {

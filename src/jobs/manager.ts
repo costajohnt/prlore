@@ -13,7 +13,7 @@ import { BudgetExceededError, type ModelProvider } from "../model/provider.js";
 import { synthesize } from "../reconciler/synthesize.js";
 import { CandidateLearningSchema, type CandidateLearning } from "../schemas/candidate-learning.js";
 import { CheckpointSchema, type Checkpoint } from "../schemas/checkpoint.js";
-import type { MineConfig } from "../schemas/mine-config.js";
+import { DEFAULT_MAX_BUDGET_USD, type MineConfig } from "../schemas/mine-config.js";
 import type { ContestedItem, Provenance } from "../schemas/provenance.js";
 import { loadCheckpoint, saveCheckpoint } from "../state/checkpoint.js";
 import { readCorpus } from "../state/corpus.js";
@@ -238,7 +238,7 @@ export class JobManager implements JobManagerApi {
     // and synthesize (below) get the raw provider with the full budget.
     const extractionProvider = cappedProvider(
       deps.provider,
-      config.model.maxBudgetUsd * (1 - SYNTHESIS_RESERVE),
+      (deps.provider.capUsd?.() ?? config.model.maxBudgetUsd ?? DEFAULT_MAX_BUDGET_USD) * (1 - SYNTHESIS_RESERVE),
     );
     const extractor = new Extractor({ provider: extractionProvider, stateDir: deps.stateDir, model: config.model.model });
     const throttle = new Throttle({ now });

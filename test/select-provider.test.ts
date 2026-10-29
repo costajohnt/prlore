@@ -110,6 +110,27 @@ test("selectProvider forwards model and maxBudgetUsd to the constructed claude-c
   ).rejects.toThrow(/budget/i);
 });
 
+test("claude-cli has no budget cap unless one is set, since its costs are subscription estimates", () => {
+  const uncapped = selectProvider({ provider: "claude-cli" }, {}, () => true, noop);
+  expect(uncapped.capUsd?.()).toBe(Number.POSITIVE_INFINITY);
+
+  const capped = selectProvider({ provider: "claude-cli", maxBudgetUsd: 5 }, {}, () => true, noop);
+  expect(capped.capUsd?.()).toBe(5);
+});
+
+test("billed providers default to the $10 budget when none is set", () => {
+  const anthropic = selectProvider(
+    { provider: "anthropic" },
+    { ANTHROPIC_API_KEY: "sk-ant-fake-for-test" },
+    () => false,
+    noop,
+  );
+  expect(anthropic.capUsd?.()).toBe(10);
+
+  const ollama = selectProvider({ provider: "ollama" }, {}, () => false, noop);
+  expect(ollama.capUsd?.()).toBe(10);
+});
+
 // ---- hasClaudeCli default implementation (mocked spawnSync, no real PATH probe) --
 
 vi.mock("node:child_process", () => ({

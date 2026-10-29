@@ -1,5 +1,9 @@
 import { z } from "zod";
 
+// Budget for providers that bill per token. claude-cli has no default cap: its costs are
+// API-price estimates against a subscription, so it is only capped when one is set.
+export const DEFAULT_MAX_BUDGET_USD = 10;
+
 export const MineConfigSchema = z.object({
   repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/, "expected owner/name"),
   baseUrl: z.string().url().default("https://api.github.com"),
@@ -52,7 +56,7 @@ export const MineConfigSchema = z.object({
         .default("auto"),
       model: z.string().optional(),
       baseUrl: z.string().url().optional(),
-      maxBudgetUsd: z.number().positive().default(10),
+      maxBudgetUsd: z.number().positive().optional(),
     })
     .prefault({}),
 });

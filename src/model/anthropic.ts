@@ -40,6 +40,10 @@ export class AnthropicProvider implements ModelProvider {
     return this.spent;
   }
 
+  capUsd(): number {
+    return this.opts.maxBudgetUsd;
+  }
+
   async complete<T>({ system, prompt, schema, maxTokens = 4096 }: CompleteOptions<T>): Promise<T> {
     const model = this.model;
     let lastError = "";
