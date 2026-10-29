@@ -50,7 +50,8 @@ export const USAGE = `usage: prlore mine <owner/repo> [options]
                              logins). When set and --intent is not given, the
                              default intent switches to documenting the
                              review feedback these authors received.
-  --budget <usd>             max USD to spend on model calls (default: 10)
+  --budget <usd>             max USD to spend on model calls (default: 10;
+                             no cap with claude-cli unless set)
   --model <id>                model id override
   --provider <anthropic|claude-cli|github-models|ollama|openai|auto>
                              which model backend to use (default: auto)

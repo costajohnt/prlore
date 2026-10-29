@@ -12,21 +12,30 @@ import { BudgetExceededError, type CompleteOptions, type ModelProvider } from ".
  * reserves headroom so synthesis can still complete after a budget-partial extraction.
  */
 export function cappedProvider(inner: ModelProvider, capUsd: number): ModelProvider {
+  const startSpent = inner.spentUsd();
+  let completed = 0;
+  let inFlight = 0;
+
   return {
     spentUsd: () => inner.spentUsd(),
-    // Overshoot window: the gate above only checks spend BEFORE a call starts, not
-    // after. Under concurrent extraction, up to (concurrency - 1) in-flight calls can
-    // all read spent < capUsd and pass the gate before any of their cost registers on
-    // the shared inner counter — so actual spend can land somewhat over capUsd, bounded
-    // by roughly one call's worth of cost per in-flight slot. Same window exists on the
-    // real (uncapped) provider at its own maxBudgetUsd cap, for the same reason — this
-    // isn't a gap introduced by wrapping, just inherited from a pre-call-only gate.
-    // Accepted for v1: the bound is small relative to typical budgets and closing it
-    // would need a reservation/rollback protocol the spend model doesn't have yet.
+    // The gate counts calls that are still running at the average cost of the calls
+    // this wrapper has finished (retries included), not just what they have booked so
+    // far. Checking booked spend alone let every concurrent extraction worker pass the
+    // gate just under the cap, and each one's retry is only gated by the inner
+    // provider's full cap, so extraction could run well past capUsd and eat the
+    // synthesis reserve. The average is an estimate, so a small overshoot remains when
+    // call costs vary.
     async complete<T>(opts: CompleteOptions<T>): Promise<T> {
       const spent = inner.spentUsd();
-      if (spent >= capUsd) throw new BudgetExceededError(spent, capUsd);
-      return inner.complete(opts);
+      const averageCost = completed === 0 ? 0 : (spent - startSpent) / completed;
+      if (spent + inFlight * averageCost >= capUsd) throw new BudgetExceededError(spent, capUsd);
+      inFlight++;
+      try {
+        return await inner.complete(opts);
+      } finally {
+        inFlight--;
+        completed++;
+      }
     },
   };
 }

@@ -44,7 +44,8 @@ usage: prlore mine <owner/repo> [options]
                              logins). When set and --intent is not given, the
                              default intent switches to documenting the
                              review feedback these authors received.
-  --budget <usd>             max USD to spend on model calls (default: 10)
+  --budget <usd>             max USD to spend on model calls (default: 10;
+                             no cap with claude-cli unless set)
   --model <id>                model id override
   --provider <anthropic|claude-cli|github-models|ollama|openai|auto>
                              which model backend to use (default: auto)
@@ -176,6 +177,10 @@ works cold.
 - `model.model` — which Anthropic model to use (defaults to prlore's built-in
   default; see `src/model/anthropic.ts` for the current price table).
 - `model.maxBudgetUsd` — a hard USD cap across the whole run (default `10`).
+  With `claude-cli` there is no default cap: its costs are the CLI's API-price
+  estimates against your subscription, not a bill, so it is only capped when
+  you set a budget. Extraction stops at 80% of the cap, counting calls still in
+  flight, so the rest is left for synthesis.
   Once tripped during extraction, the run degrades to a partial-corpus draft
   with a warning; once tripped during synthesis (the highest-value calls), the
   job fails outright rather than emitting a truncated conventions doc.

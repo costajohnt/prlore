@@ -10,7 +10,7 @@ test("MineConfig applies spec defaults from minimal input", () => {
   expect(c.timeRange.maxPrs).toBe(1500);
   expect(c.output).toEqual({ target: "AGENTS.md", layout: "auto", citations: "inline-light", maxRules: 60 });
   expect(c.model.provider).toBe("auto");
-  expect(c.model.maxBudgetUsd).toBe(10);
+  expect(c.model.maxBudgetUsd).toBeUndefined();
 });
 
 test("MineConfig fills defaults inside partially-provided nested objects", () => {
@@ -23,7 +23,7 @@ test("MineConfig fills defaults inside partially-provided nested objects", () =>
   expect(c.timeRange.maxPrs).toBe(200);
   expect(c.timeRange.since).toBeUndefined();
   expect(c.model.provider).toBe("sampling");
-  expect(c.model.maxBudgetUsd).toBe(10);
+  expect(c.model.maxBudgetUsd).toBeUndefined();
   expect(c.output.layout).toBe("auto"); // fully-omitted parent still defaults
 });
 

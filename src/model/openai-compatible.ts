@@ -55,6 +55,10 @@ export class OpenAICompatibleProvider implements ModelProvider {
     return this.spent;
   }
 
+  capUsd(): number {
+    return this.opts.maxBudgetUsd;
+  }
+
   async complete<T>({ system, prompt, schema, maxTokens = 4096 }: CompleteOptions<T>): Promise<T> {
     let lastError = "";
     for (let attempt = 0; attempt < 2; attempt++) {
