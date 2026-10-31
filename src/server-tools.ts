@@ -127,7 +127,7 @@ export function registerTools(
   server.registerTool(
     "cancel",
     {
-      description: "Cancel the current mining job. It checkpoints at the next stage boundary.",
+      description: "Request cancellation of the current mining job. Returns immediately; the job stops at the next stage boundary (an in-flight stage still completes), so poll status for the final state.",
       inputSchema: { jobId: z.string() },
     },
     async ({ jobId }) => {

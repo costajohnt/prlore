@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 
 const run = promisify(execFile);
 
-async function git(cwd: string, args: string[], date?: string): Promise<void> {
+export async function git(cwd: string, args: string[], date?: string): Promise<void> {
   const env = {
     ...process.env,
     GIT_AUTHOR_NAME: "Fixture",

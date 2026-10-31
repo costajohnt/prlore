@@ -15,7 +15,7 @@ import { CandidateLearningSchema, type CandidateLearning } from "../schemas/cand
 import { CheckpointSchema, type Checkpoint } from "../schemas/checkpoint.js";
 import { DEFAULT_MAX_BUDGET_USD, type MineConfig } from "../schemas/mine-config.js";
 import type { ContestedItem, Provenance } from "../schemas/provenance.js";
-import { loadCheckpoint, saveCheckpoint } from "../state/checkpoint.js";
+import { loadCheckpoint, resetState, saveCheckpoint } from "../state/checkpoint.js";
 import { readCorpus } from "../state/corpus.js";
 import { cappedProvider } from "./capped-provider.js";
 import type { JobStatus } from "./registry.js";
@@ -53,7 +53,7 @@ export interface JobResult {
 export interface JobManagerApi {
   start(config: MineConfig, deps: JobDeps): { jobId: string; resumed: boolean };
   status(jobId?: string): JobStatus;
-  cancel(jobId: string): Promise<{ checkpointed: boolean }>;
+  cancel(jobId: string): Promise<{ checkpointed: boolean; pending: boolean }>;
   result(jobId: string): JobResult | null;
 }
 
@@ -167,18 +167,19 @@ export class JobManager implements JobManagerApi {
     };
   }
 
-  async cancel(jobId: string): Promise<{ checkpointed: boolean }> {
+  async cancel(jobId: string): Promise<{ checkpointed: boolean; pending: boolean }> {
     const job = this.job;
-    if (!job || job.jobId !== jobId) return { checkpointed: false };
+    if (!job || job.jobId !== jobId) return { checkpointed: false, pending: false };
 
-    if (job.status.state === "running") {
-      job.cancelRequested = true;
-      await job.settledPromise;
-    }
+    // Non-blocking: the in-flight stage (synthesize can run for minutes) is never
+    // awaited here, so an MCP host's request does not time out. `pending` tells the
+    // caller to poll status() for the cancelled/ready-for-preview outcome.
+    const pending = job.status.state === "running";
+    if (pending) job.cancelRequested = true;
 
     const now = job.deps.now ?? Date.now;
     const cp = await loadCheckpoint(job.deps.stateDir, now);
-    return { checkpointed: cp !== null };
+    return { checkpointed: cp !== null, pending };
   }
 
   result(jobId: string): JobResult | null {
@@ -214,10 +215,7 @@ export class JobManager implements JobManagerApi {
     // belongs to the self-flip that owns it (fetcher: fetching->extracting; extractor
     // sweep below: extracting->analyzing; synthesize: analyzing|synthesizing->ready-for-preview).
     let cp = await loadCheckpoint(deps.stateDir, now);
-    if (!cp || cp.configHash !== hash) {
-      cp = { configHash: hash, stage: "fetching", cursor: null, overflowQueue: [], maxUpdatedAt: null, counters: {} };
-      await saveCheckpoint(deps.stateDir, cp);
-    }
+    if (!cp || cp.configHash !== hash) cp = await resetState(deps.stateDir, hash);
     this.mergeStatus(job, { stage: cp.stage, counters: { ...cp.counters } });
     if (this.checkCancel(job)) return;
 
@@ -228,6 +226,7 @@ export class JobManager implements JobManagerApi {
       git,
       now,
       stateDir: deps.stateDir,
+      excludes: defaultExcludes(config),
     });
     if (this.checkCancel(job)) return;
 
@@ -272,12 +271,15 @@ export class JobManager implements JobManagerApi {
         `extraction budget-partial: ${extractSummary.skippedBudget} skipped; resume with a higher budget re-uses the cache`,
       );
     }
+    if (extractSummary.failed > 0) {
+      warnings.push(`extraction failed for ${extractSummary.failed} PR(s) after retries (last: ${extractSummary.lastError})`);
+    }
     if (extractSummary.prsSeen === 0) {
       warnings.push("no PRs processed — corpus empty or config too narrow");
     }
     this.mergeStatus(job, { warnings });
 
-    // Self-flip extracting->analyzing, guarded exactly like extractFromCorpus.ts: a
+    // Self-flip extracting->analyzing, guarded like the synthesize() stage flip: a
     // budget-partial run must NOT advance the on-disk stage, so a later resume with a
     // raised budget re-enters extraction and gets cheap cache hits for everything
     // already extracted. The pipeline still proceeds to synthesize below regardless —

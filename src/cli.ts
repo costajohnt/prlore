@@ -118,12 +118,14 @@ function parseMineArgs(argv: string[], now: () => number): ParsedMineArgs {
   }
 
   let since: string | undefined = values.since as string | undefined;
+  let daysInput: number | undefined;
   if (values.days !== undefined) {
     const days = Number(values.days);
     if (!Number.isFinite(days) || days <= 0) {
       throw new CliUsageError(`--days must be a positive number, got "${values.days as string}"`);
     }
     since = new Date(now() - days * 24 * 60 * 60 * 1000).toISOString();
+    daysInput = days;
   }
 
   let maxBudgetUsd: number | undefined;
@@ -170,7 +172,7 @@ function parseMineArgs(argv: string[], now: () => number): ParsedMineArgs {
       repo,
       intent,
       authors,
-      ...(since !== undefined ? { timeRange: { since } } : {}),
+      ...(since !== undefined ? { timeRange: { since, ...(daysInput !== undefined ? { days: daysInput } : {}) } } : {}),
       output: { target, ...(maxRules !== undefined ? { maxRules } : {}) },
       model: {
         ...(provider !== undefined ? { provider } : {}),
@@ -297,6 +299,14 @@ export async function runMineCli(argv: string[], deps: CliDeps): Promise<number>
     `prlore: ${result.provenance.rules.length} rules, ${result.provenance.dropped.length} dropped, ` +
       `${result.contested.length} contested, spent $${(status.tokensSpentUsd ?? 0).toFixed(2)}\n`,
   );
+
+  for (const w of status.warnings ?? []) deps.stderr.write(`warning: ${w}\n`);
+  // A reconcile fallback means no probe ran and every rule is "unobservable": the preview
+  // above is for inspection only, and the run is a failure rather than a doc to ship.
+  if (status.warnings?.some((w) => w.startsWith("reconcile fallback:"))) {
+    deps.stderr.write("prlore: reconcile model call failed, every rule is unobservable; not written\n");
+    return 1;
+  }
 
   if (parsed.dryRun) {
     deps.stderr.write("dry run: not written\n");

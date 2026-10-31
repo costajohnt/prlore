@@ -111,8 +111,8 @@ class ScriptedJobManager implements JobManagerApi {
     this.idx++;
     return s;
   }
-  async cancel(): Promise<{ checkpointed: boolean }> {
-    return { checkpointed: false };
+  async cancel(): Promise<{ checkpointed: boolean; pending: boolean }> {
+    return { checkpointed: false, pending: false };
   }
   result(): JobResult | null {
     return this.res;
@@ -267,6 +267,7 @@ test("--days converts to an ISO --since via the injected now(), threaded into th
   expect(code).toBe(0);
   expect(manager.startCalls).toHaveLength(1);
   expect(manager.startCalls[0]!.config.timeRange.since).toBe("2026-06-30T00:00:00.000Z");
+  expect(manager.startCalls[0]!.config.timeRange.days).toBe(10);
 });
 
 test("invalid config (malformed repo) fails MineConfigSchema.parse -> human-readable zod error, exit 2", async () => {
@@ -706,4 +707,28 @@ test("an unknown --provider exits 2 and the error lists the new values", async (
 
   expect(code).toBe(2);
   expect(err()).toMatch(/github-models|ollama/);
+});
+
+// ---- warnings ------------------------------------------------------------------
+
+test("job warnings are printed to stderr; a reconcile fallback fails the run (exit 1) without writing", async () => {
+  const { stdout, stderr, err } = streams();
+  const manager = new ScriptedJobManager(
+    [readyStatus({ warnings: ["cluster fallback used for 1 bucket(s)", "reconcile fallback: 529 overloaded"] })],
+    { draft: mkDraft([]), provenance: mkProvenance([mkRule()]), contested: [] },
+  );
+  let confirmed = false;
+  const code = await runMineCli(baseArgv("o/r", await tmpRepo()), {
+    makeDeps,
+    manager,
+    stdout,
+    stderr,
+    confirm: async () => (confirmed = true),
+    pollIntervalMs: 0,
+  });
+  expect(code).toBe(1);
+  expect(err()).toContain("warning: cluster fallback used for 1 bucket(s)");
+  expect(err()).toContain("warning: reconcile fallback: 529 overloaded");
+  expect(err()).toContain("every rule is unobservable; not written");
+  expect(confirmed).toBe(false);
 });

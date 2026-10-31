@@ -188,11 +188,13 @@ test("provider throw: no exception escapes; every cluster falls back to unobserv
     },
   };
 
+  const warnings: string[] = [];
   const rules = await reconcileClusters(clusters, [], emptyPatterns, {
     provider: throwing,
     git: realGit,
     repoPath: await buildFixtureRepo(),
     now,
+    warnings,
   });
 
   expect(rules).toHaveLength(3);
@@ -200,6 +202,7 @@ test("provider throw: no exception escapes; every cluster falls back to unobserv
     expect(r.verdict).toBe("unobservable"); // no-proposal default path
     expect(r.probeResult).toBeUndefined();
   }
+  expect(warnings).toEqual(["reconcile fallback: model unavailable"]);
 });
 
 // ---- Behavior 5: conflict pairs -------------------------------------------

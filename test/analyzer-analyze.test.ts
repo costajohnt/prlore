@@ -1,4 +1,4 @@
-import { chmod, readFile } from "node:fs/promises";
+import { chmod, readFile, writeFile } from "node:fs/promises";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,7 +7,7 @@ import type { CompleteOptions, ModelProvider } from "../src/model/provider.js";
 import { MineConfigSchema } from "../src/schemas/mine-config.js";
 import { PatternsModelSchema } from "../src/schemas/patterns-model.js";
 import { analyze } from "../src/analyzer/analyze.js";
-import { buildFixtureRepo } from "./helpers/fixture-repo.js";
+import { buildFixtureRepo, git } from "./helpers/fixture-repo.js";
 
 const NOW = new Date("2026-07-01T00:00:00Z").getTime();
 
@@ -83,4 +83,24 @@ test("analyze works without stateDir and skips unreadable exemplars", async () =
   expect(prompts[0]).toContain('newApi("button")');
   // ...but the unreadable file's unique content did not
   expect(prompts[0]).not.toContain("helper()");
+});
+
+test("analyze migration probes ignore excluded paths such as prlore's own output", async () => {
+  const repo = await buildFixtureRepo();
+  // A committed AGENTS.md from a prior run is the only place these tokens occur.
+  await writeFile(join(repo, "AGENTS.md"), "Migrate ghostFrom to ghostTo.\n");
+  await git(repo, ["add", "-A"]);
+  await git(repo, ["commit", "-q", "-m", "agents"]);
+  const config = MineConfigSchema.parse({ repo: "o/r", intent: "x" });
+  const ghost = { ...draft, migrationCandidates: [{ from: "ghostFrom", to: "ghostTo" }] };
+
+  const unexcluded = await analyze(repo, config, { provider: fakeProvider(ghost).provider, now: () => NOW });
+  expect(unexcluded.migrations).toHaveLength(1);
+
+  const excluded = await analyze(repo, config, {
+    provider: fakeProvider(ghost).provider,
+    now: () => NOW,
+    excludes: ["AGENTS.md", ".prlore"],
+  });
+  expect(excluded.migrations).toHaveLength(0);
 });

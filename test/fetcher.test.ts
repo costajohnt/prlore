@@ -377,7 +377,7 @@ test("resume from checkpoint", async () => {
   expect(prs).toHaveLength(2);
 });
 
-test("config change resets cursor but keeps corpus", async () => {
+test("config change resets cursor and corpus", async () => {
   const config = mkConfig();
   const { stateDir } = await freshDeps();
 
@@ -423,8 +423,10 @@ test("config change resets cursor but keeps corpus", async () => {
   const pageCalls = calls.filter((c) => !c.query.includes("preflight"));
   expect(pageCalls[0]!.variables.cursor).toBeNull();
 
+  // The stale run's PRs must not survive: they were fetched under a different
+  // author/time/repo config and would otherwise feed extraction and synthesis.
   const { prs } = await readCorpus(join(stateDir, "corpus.jsonl"));
-  expect(prs).toHaveLength(2);
+  expect(prs.map((p) => p.number)).toEqual([2]);
 });
 
 test("maxPrs stop", async () => {
@@ -548,4 +550,23 @@ test("preflight failure aborts before any state write", async () => {
   ).rejects.toThrow(PreflightError);
 
   expect(existsSync(join(stateDir, "checkpoint.json"))).toBe(false);
+});
+
+test("--since with a non-UTC offset is compared chronologically, not lexicographically", async () => {
+  // 10:00-05:00 is 15:00Z: a PR updated at 12:00Z is before the cutoff and must be dropped.
+  const config = mkConfig({ timeRange: { since: "2026-06-01T10:00:00-05:00", maxPrs: 10 } });
+  const { stateDir } = await freshDeps();
+  const page1 = {
+    rateLimit: rateLimit(),
+    repository: {
+      pullRequests: {
+        pageInfo: { hasNextPage: false, endCursor: null },
+        nodes: [mkPr(2, "2026-06-01T16:00:00Z"), mkPr(1, "2026-06-01T12:00:00Z")],
+      },
+    },
+  };
+  const { transport } = fakeTransport([page1]);
+  await fetchCorpus(config, { transport, throttle: quietThrottle(), stateDir });
+  const { prs } = await readCorpus(join(stateDir, "corpus.jsonl"));
+  expect(prs.map((p) => p.number)).toEqual([2]);
 });

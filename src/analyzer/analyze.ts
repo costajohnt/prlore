@@ -16,6 +16,8 @@ export interface AnalyzeDeps {
   git?: GitRunner;
   now?: () => number;
   stateDir?: string;
+  /** Pathspecs the migration probes must not count as evidence (prlore's own output). */
+  excludes?: string[];
 }
 
 const AnalyzerDraftSchema = z.object({
@@ -106,7 +108,7 @@ token pairs.`;
     maxTokens: 8192,
   });
 
-  const migrations = await verifyMigrations(git, repoPath, draft.migrationCandidates, now);
+  const migrations = await verifyMigrations(git, repoPath, draft.migrationCandidates, now, deps.excludes);
 
   const descriptions = new Map(draft.areaDescriptions.map((d) => [d.path, d.description]));
 

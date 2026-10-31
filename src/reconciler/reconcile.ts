@@ -33,7 +33,7 @@ const ReconciliationDraftSchema = z.object({
     z.object({
       clusterId: z.number().int().min(0),
       proposedVerdict: z.enum(["corroborated", "trending-toward", "unobservable", "trending-away", "contradicted-stable"]),
-      probeToken: z.string().min(1).optional(),
+      probeToken: z.string().trim().min(2).optional(), // a bare space would match every line
       probeExpectation: z.enum(["presence-supports", "presence-contradicts"]).optional(),
     }),
   ),
@@ -95,9 +95,17 @@ export async function reconcileClusters(
   clusters: Cluster[],
   conflictPairs: [number, number][],
   patterns: PatternsModel,
-  deps: { provider: ModelProvider; git: GitRunner; repoPath: string; now: () => number; excludes?: string[] },
+  deps: {
+    provider: ModelProvider;
+    git: GitRunner;
+    repoPath: string;
+    now: () => number;
+    excludes?: string[];
+    /** Receives one entry when the model call fails and every cluster degrades to unobservable. */
+    warnings?: string[];
+  },
 ): Promise<ReconciledRule[]> {
-  const { provider, git, repoPath, now, excludes } = deps;
+  const { provider, git, repoPath, now, excludes, warnings } = deps;
 
   let draft: ReconciliationDraft;
   try {
@@ -109,6 +117,7 @@ export async function reconcileClusters(
     });
   } catch (err) {
     if (err instanceof BudgetExceededError) throw err;
+    warnings?.push(`reconcile fallback: ${err instanceof Error ? err.message : String(err)}`);
     draft = { proposals: [] };
   }
 
