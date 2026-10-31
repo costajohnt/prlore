@@ -228,6 +228,7 @@ export class JobManager implements JobManagerApi {
       git,
       now,
       stateDir: deps.stateDir,
+      excludes: defaultExcludes(config),
     });
     if (this.checkCancel(job)) return;
 
