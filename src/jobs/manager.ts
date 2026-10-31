@@ -278,7 +278,7 @@ export class JobManager implements JobManagerApi {
     }
     this.mergeStatus(job, { warnings });
 
-    // Self-flip extracting->analyzing, guarded exactly like extractFromCorpus.ts: a
+    // Self-flip extracting->analyzing, guarded like the synthesize() stage flip: a
     // budget-partial run must NOT advance the on-disk stage, so a later resume with a
     // raised budget re-enters extraction and gets cheap cache hits for everything
     // already extracted. The pipeline still proceeds to synthesize below regardless —

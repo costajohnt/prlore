@@ -244,7 +244,7 @@ export async function synthesize(
     // owns the analyzing->synthesizing->ready-for-preview transition, but upstream
     // job managers may or may not have already pre-flipped the checkpoint to
     // "synthesizing" before calling in. A missing checkpoint or a checkpoint at any
-    // other stage is left untouched (same pattern as extractFromCorpus).
+    // other stage is left untouched (same pattern as JobManager's stage flip).
     const cp = await loadCheckpoint(stateDir);
     if (cp && (cp.stage === "analyzing" || cp.stage === "synthesizing")) {
       cp.stage = "ready-for-preview";
