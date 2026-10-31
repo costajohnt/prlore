@@ -16,6 +16,8 @@ export const MineConfigSchema = z.object({
   timeRange: z
     .object({
       since: z.string().datetime({ offset: true }).optional(),
+      /** Set by `--days N`: the checkpoint identity hashes this instead of the clock-derived `since`. */
+      days: z.number().positive().optional(),
       maxPrs: z.number().int().positive().default(1500),
     })
     .prefault({}),

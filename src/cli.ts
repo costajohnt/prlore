@@ -118,14 +118,14 @@ function parseMineArgs(argv: string[], now: () => number): ParsedMineArgs {
   }
 
   let since: string | undefined = values.since as string | undefined;
+  let daysInput: number | undefined;
   if (values.days !== undefined) {
     const days = Number(values.days);
     if (!Number.isFinite(days) || days <= 0) {
       throw new CliUsageError(`--days must be a positive number, got "${values.days as string}"`);
     }
-    const d = new Date(now() - days * 24 * 60 * 60 * 1000);
-    d.setUTCHours(0, 0, 0, 0); // day-granular so repeated runs share a checkpoint
-    since = d.toISOString();
+    since = new Date(now() - days * 24 * 60 * 60 * 1000).toISOString();
+    daysInput = days;
   }
 
   let maxBudgetUsd: number | undefined;
@@ -172,7 +172,7 @@ function parseMineArgs(argv: string[], now: () => number): ParsedMineArgs {
       repo,
       intent,
       authors,
-      ...(since !== undefined ? { timeRange: { since } } : {}),
+      ...(since !== undefined ? { timeRange: { since, ...(daysInput !== undefined ? { days: daysInput } : {}) } } : {}),
       output: { target, ...(maxRules !== undefined ? { maxRules } : {}) },
       model: {
         ...(provider !== undefined ? { provider } : {}),

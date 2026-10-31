@@ -215,7 +215,7 @@ export class JobManager implements JobManagerApi {
     // belongs to the self-flip that owns it (fetcher: fetching->extracting; extractor
     // sweep below: extracting->analyzing; synthesize: analyzing|synthesizing->ready-for-preview).
     let cp = await loadCheckpoint(deps.stateDir, now);
-    if (!cp || cp.configHash !== hash) cp = await resetState(deps.stateDir, hash, now);
+    if (!cp || cp.configHash !== hash) cp = await resetState(deps.stateDir, hash);
     this.mergeStatus(job, { stage: cp.stage, counters: { ...cp.counters } });
     if (this.checkCancel(job)) return;
 

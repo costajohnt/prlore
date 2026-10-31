@@ -133,14 +133,14 @@ test("H1 (crash window): network failure right after the corpus wipe must not si
   expect(summary.kept).toBe(1);
 });
 
-// H1 design hazard: `--days` resolves to `since = now - days` with millisecond precision
-// (src/cli.ts:126) and `since` is part of the config hash. Two consecutive runs of the
-// identical command therefore never share a checkpoint. Today that costs a full refetch
-// (JobManager resets the checkpoint); once the H1 wipe actually fires it costs the corpus.
+// `--days` resolves to `since = now - days` with millisecond precision, so the CLI also
+// records `days` and the hash uses that instead of the clock-derived instant; otherwise
+// two consecutive runs of the identical command would never share a checkpoint and the
+// H1 reset would supersede the corpus on every invocation.
 test("H1 (--days): the same --days N command on two consecutive runs must hash to the same checkpoint identity", () => {
   const days = 30;
   const t0 = Date.parse("2026-07-10T00:00:00.000Z");
-  const sinceA = new Date(t0 - days * 86_400_000).toISOString(); // src/cli.ts:126 verbatim
+  const sinceA = new Date(t0 - days * 86_400_000).toISOString(); // src/cli.ts verbatim
   const sinceB = new Date(t0 + 1 - days * 86_400_000).toISOString(); // one ms later
-  expect(configHash(mkConfig({ timeRange: { since: sinceA } }))).toBe(configHash(mkConfig({ timeRange: { since: sinceB } })));
+  expect(configHash(mkConfig({ timeRange: { since: sinceA, days } }))).toBe(configHash(mkConfig({ timeRange: { since: sinceB, days } })));
 });

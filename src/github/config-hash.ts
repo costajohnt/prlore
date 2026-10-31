@@ -5,11 +5,12 @@ export function configHash(config: MineConfig): string {
   const identity: Record<string, unknown> = {
     repo: config.repo,
     baseUrl: config.baseUrl,
-    // Day granularity: `--days N` recomputes `since` from the clock every run, and a
-    // millisecond-fresh hash would reset (and quarantine) the corpus on every invocation.
-    since: config.timeRange.since ? config.timeRange.since.slice(0, 10) : null,
+    // `--days N` recomputes `since` from the clock every run, so the identity is the
+    // user's N, not the derived instant; an explicit --since hashes its exact UTC instant.
+    since: config.timeRange.days === undefined && config.timeRange.since ? new Date(config.timeRange.since).toISOString() : null,
     maxPrs: config.timeRange.maxPrs,
   };
+  if (config.timeRange.days !== undefined) identity.days = config.timeRange.days;
   // The authors filter changes WHICH PRs survive into the corpus, so switching
   // it against the same stateDir must not reuse a checkpoint built under a
   // different filter. Normalized (lowercased + sorted) so case/order variants

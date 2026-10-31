@@ -267,6 +267,7 @@ test("--days converts to an ISO --since via the injected now(), threaded into th
   expect(code).toBe(0);
   expect(manager.startCalls).toHaveLength(1);
   expect(manager.startCalls[0]!.config.timeRange.since).toBe("2026-06-30T00:00:00.000Z");
+  expect(manager.startCalls[0]!.config.timeRange.days).toBe(10);
 });
 
 test("invalid config (malformed repo) fails MineConfigSchema.parse -> human-readable zod error, exit 2", async () => {
