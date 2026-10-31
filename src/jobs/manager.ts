@@ -167,18 +167,19 @@ export class JobManager implements JobManagerApi {
     };
   }
 
-  async cancel(jobId: string): Promise<{ checkpointed: boolean }> {
+  async cancel(jobId: string): Promise<{ checkpointed: boolean; pending: boolean }> {
     const job = this.job;
-    if (!job || job.jobId !== jobId) return { checkpointed: false };
+    if (!job || job.jobId !== jobId) return { checkpointed: false, pending: false };
 
-    if (job.status.state === "running") {
-      job.cancelRequested = true;
-      await job.settledPromise;
-    }
+    // Non-blocking: the in-flight stage (synthesize can run for minutes) is never
+    // awaited here, so an MCP host's request does not time out. `pending` tells the
+    // caller to poll status() for the cancelled/ready-for-preview outcome.
+    const pending = job.status.state === "running";
+    if (pending) job.cancelRequested = true;
 
     const now = job.deps.now ?? Date.now;
     const cp = await loadCheckpoint(job.deps.stateDir, now);
-    return { checkpointed: cp !== null };
+    return { checkpointed: cp !== null, pending };
   }
 
   result(jobId: string): JobResult | null {

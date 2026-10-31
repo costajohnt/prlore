@@ -139,11 +139,12 @@ test("duplicate enqueue in the same run is dropped, not double-extracted", async
 test("persistent failure retries 3x then skips; run still succeeds", async () => {
   const stateDir = await dir();
   const { p, stats } = provider(() => "fail");
-  const x = new Extractor({ provider: p, stateDir });
+  const x = new Extractor({ provider: p, stateDir, retryDelayMs: 0 });
   x.enqueue(pr(3));
   x.enqueue(pr(4));
   const s = await x.drain();
   expect(s).toMatchObject({ failed: 2, extracted: 0, candidates: 0 });
+  expect(s.lastError).toMatch(/\S/);
   expect(stats().calls).toBe(6); // 3 attempts each
 });
 

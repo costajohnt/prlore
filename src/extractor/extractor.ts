@@ -12,6 +12,8 @@ export interface ExtractorDeps {
   stateDir: string;
   concurrency?: number;
   model?: string;
+  /** Base delay between failed attempts (multiplied by the attempt number). */
+  retryDelayMs?: number;
 }
 
 export interface ExtractSummary {
@@ -22,6 +24,8 @@ export interface ExtractSummary {
   skippedBudget: number;
   duplicates: number;
   candidates: number;
+  /** Message of the most recent final (post-retry) failure, for the job warning. */
+  lastError?: string;
 }
 
 const MAX_ATTEMPTS = 3;
@@ -88,7 +92,12 @@ export class Extractor {
           this.summary.skippedBudget++;
           return;
         }
-        if (attempt === MAX_ATTEMPTS) this.summary.failed++;
+        if (attempt === MAX_ATTEMPTS) {
+          this.summary.failed++;
+          this.summary.lastError = err instanceof Error ? err.message : String(err);
+        } else {
+          await new Promise((r) => setTimeout(r, (this.deps.retryDelayMs ?? 1000) * attempt));
+        }
       }
     }
   }
