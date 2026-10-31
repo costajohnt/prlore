@@ -127,7 +127,9 @@ export async function fetchCorpus(config: MineConfig, deps: FetchDeps): Promise<
   }
 
   const ingest: IngestCounters = { botCommentsStripped: counter(cp, "botCommentsStripped") };
-  const since = config.timeRange.since ?? null;
+  // GitHub timestamps are always `Z`; normalize an explicit --since offset so the
+  // string comparison below stays chronological.
+  const since = config.timeRange.since ? new Date(config.timeRange.since).toISOString() : null;
   const maxPrs = config.timeRange.maxPrs;
 
   if (cp.stage === "fetching") {
