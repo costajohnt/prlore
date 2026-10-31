@@ -53,7 +53,7 @@ export interface JobResult {
 export interface JobManagerApi {
   start(config: MineConfig, deps: JobDeps): { jobId: string; resumed: boolean };
   status(jobId?: string): JobStatus;
-  cancel(jobId: string): Promise<{ checkpointed: boolean }>;
+  cancel(jobId: string): Promise<{ checkpointed: boolean; pending: boolean }>;
   result(jobId: string): JobResult | null;
 }
 
@@ -273,6 +273,9 @@ export class JobManager implements JobManagerApi {
       warnings.push(
         `extraction budget-partial: ${extractSummary.skippedBudget} skipped; resume with a higher budget re-uses the cache`,
       );
+    }
+    if (extractSummary.failed > 0) {
+      warnings.push(`extraction failed for ${extractSummary.failed} PR(s) after retries (last: ${extractSummary.lastError})`);
     }
     if (extractSummary.prsSeen === 0) {
       warnings.push("no PRs processed — corpus empty or config too narrow");

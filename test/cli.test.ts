@@ -111,8 +111,8 @@ class ScriptedJobManager implements JobManagerApi {
     this.idx++;
     return s;
   }
-  async cancel(): Promise<{ checkpointed: boolean }> {
-    return { checkpointed: false };
+  async cancel(): Promise<{ checkpointed: boolean; pending: boolean }> {
+    return { checkpointed: false, pending: false };
   }
   result(): JobResult | null {
     return this.res;

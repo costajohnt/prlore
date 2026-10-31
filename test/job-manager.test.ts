@@ -237,13 +237,17 @@ test("cancel requested during analyze takes effect at the next stage boundary: c
   const manager = new JobManager();
   const base = await freshDeps(repo, transport);
   let jobId = "";
-  let cancelResultPromise: Promise<{ checkpointed: boolean }> | undefined;
+  let cancelResultPromise: Promise<{ checkpointed: boolean; pending: boolean }> | undefined;
 
   const provider: ModelProvider = {
     spentUsd: () => 0,
     async complete<T>({ prompt, schema }: CompleteOptions<T>): Promise<T> {
       if (prompt.startsWith(ANALYZE_MARKER)) {
         cancelResultPromise = manager.cancel(jobId);
+        // cancel() must resolve while this stage is still in flight (an awaited
+        // settledPromise here would deadlock, since the stage cannot finish until we return).
+        const { pending } = await cancelResultPromise;
+        expect(pending).toBe(true);
         return schema.parse(analyzeResponse);
       }
       throw new Error(`unexpected call after cancel: ${prompt.slice(0, 40)}`);

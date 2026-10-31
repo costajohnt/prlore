@@ -47,11 +47,11 @@ class StubJobManager implements JobManagerApi {
     return this.st;
   }
 
-  async cancel(jobId: string): Promise<{ checkpointed: boolean }> {
+  async cancel(jobId: string): Promise<{ checkpointed: boolean; pending: boolean }> {
     this.cancelCalls.push(jobId);
-    if (this.st.jobId !== jobId) return { checkpointed: false };
+    if (this.st.jobId !== jobId) return { checkpointed: false, pending: false };
     this.st = { ...this.st, state: "cancelled" };
-    return { checkpointed: true };
+    return { checkpointed: true, pending: false };
   }
 
   result(jobId: string): JobResult | null {
@@ -345,7 +345,7 @@ test("mine surfaces a running-job rejection as a tool error, not a crash", async
       throw new Error("a job is already running on this manager instance");
     },
     status: () => ({ state: "running" }),
-    cancel: async () => ({ checkpointed: false }),
+    cancel: async () => ({ checkpointed: false, pending: false }),
     result: () => null,
   };
   const client = await connectedClient(manager);
@@ -391,7 +391,7 @@ test("cancel returns { checkpointed } and never crashes for an unknown jobId", a
   const client = await connectedClient(manager);
   const res = await client.callTool({ name: "cancel", arguments: { jobId: "no-such-job" } });
   expect(res.isError).toBeFalsy();
-  expect(JSON.parse(textOf(res))).toEqual({ checkpointed: false });
+  expect(JSON.parse(textOf(res))).toEqual({ checkpointed: false, pending: false });
 });
 
 // ---- pointer-mode adoption: an unmarked human AGENTS.md no longer refuses ------
