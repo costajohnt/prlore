@@ -377,7 +377,7 @@ test("resume from checkpoint", async () => {
   expect(prs).toHaveLength(2);
 });
 
-test("config change resets cursor but keeps corpus", async () => {
+test("config change resets cursor and corpus", async () => {
   const config = mkConfig();
   const { stateDir } = await freshDeps();
 
@@ -423,8 +423,10 @@ test("config change resets cursor but keeps corpus", async () => {
   const pageCalls = calls.filter((c) => !c.query.includes("preflight"));
   expect(pageCalls[0]!.variables.cursor).toBeNull();
 
+  // The stale run's PRs must not survive: they were fetched under a different
+  // author/time/repo config and would otherwise feed extraction and synthesis.
   const { prs } = await readCorpus(join(stateDir, "corpus.jsonl"));
-  expect(prs).toHaveLength(2);
+  expect(prs.map((p) => p.number)).toEqual([2]);
 });
 
 test("maxPrs stop", async () => {

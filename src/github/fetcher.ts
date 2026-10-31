@@ -1,3 +1,4 @@
+import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { MineConfig } from "../schemas/mine-config.js";
 import type { NormalizedPr } from "../schemas/normalized-pr.js";
@@ -111,6 +112,10 @@ export async function fetchCorpus(config: MineConfig, deps: FetchDeps): Promise<
   const corpusPath = join(deps.stateDir, "corpus.jsonl");
   let cp = await loadCheckpoint(deps.stateDir);
   if (!cp || cp.configHash !== hash) {
+    // The corpus is keyed by the config that produced it (repo, authors, time
+    // range): a mismatch means the old PRs would silently feed extraction and
+    // synthesis for a different query, so they go with the checkpoint.
+    await rm(corpusPath, { force: true });
     cp = {
       configHash: hash,
       stage: "fetching",
