@@ -65,8 +65,10 @@ function retryAfterMs(err: unknown, now: () => number): number | null {
   };
   const jitter = Math.floor(Math.random() * 1000);
 
-  if (e?.status === 403 || e?.status === 429) {
-    const header = e.response?.headers?.["retry-after"];
+  const header = e?.response?.headers?.["retry-after"];
+  // A 403 is only a rate limit when GitHub says so; a scope/SAML 403 must surface at once.
+  const limited403 = e?.status === 403 && (header !== undefined || e.response?.headers?.["x-ratelimit-remaining"] === "0");
+  if (limited403 || e?.status === 429) {
     const seconds = header ? Number(header) : 60;
     return (Number.isFinite(seconds) ? seconds : 60) * 1000 + jitter;
   }

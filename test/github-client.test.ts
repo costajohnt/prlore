@@ -134,3 +134,18 @@ test("preflight throws PreflightError when the repository is inaccessible", asyn
   const transport = (async () => ({ viewer: { login: "octocat" }, repository: null })) as never;
   await expect(preflight(transport, "owner", "gone")).rejects.toThrow(PreflightError);
 });
+
+test("withRetry rethrows a plain 403 (missing scope, SAML) immediately instead of sleeping on it", async () => {
+  let calls = 0;
+  const forbidden = (async () => {
+    calls++;
+    const err = new Error("Resource not accessible by integration") as Error & { status?: number };
+    err.status = 403;
+    throw err;
+  }) as unknown as Parameters<typeof withRetry>[0];
+  const sleeps: number[] = [];
+  const wrapped = withRetry(forbidden, { sleep: async (ms) => void sleeps.push(ms) });
+  await expect(wrapped("query {}", {})).rejects.toThrow(/not accessible/);
+  expect(calls).toBe(1);
+  expect(sleeps).toEqual([]);
+});
