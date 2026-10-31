@@ -33,7 +33,7 @@ const ReconciliationDraftSchema = z.object({
     z.object({
       clusterId: z.number().int().min(0),
       proposedVerdict: z.enum(["corroborated", "trending-toward", "unobservable", "trending-away", "contradicted-stable"]),
-      probeToken: z.string().min(1).optional(),
+      probeToken: z.string().trim().min(2).optional(), // a bare space would match every line
       probeExpectation: z.enum(["presence-supports", "presence-contradicts"]).optional(),
     }),
   ),
