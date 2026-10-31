@@ -1,9 +1,8 @@
-import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { MineConfig } from "../schemas/mine-config.js";
 import type { NormalizedPr } from "../schemas/normalized-pr.js";
 import type { Checkpoint } from "../schemas/checkpoint.js";
-import { loadCheckpoint, saveCheckpoint } from "../state/checkpoint.js";
+import { loadCheckpoint, resetState, saveCheckpoint } from "../state/checkpoint.js";
 import { appendJsonl } from "../state/jsonl.js";
 import { readCorpus } from "../state/corpus.js";
 import { configHash } from "./config-hash.js";
@@ -111,20 +110,8 @@ export async function fetchCorpus(config: MineConfig, deps: FetchDeps): Promise<
   const hash = configHash(config);
   const corpusPath = join(deps.stateDir, "corpus.jsonl");
   let cp = await loadCheckpoint(deps.stateDir);
-  if (!cp || cp.configHash !== hash) {
-    // The corpus is keyed by the config that produced it (repo, authors, time
-    // range): a mismatch means the old PRs would silently feed extraction and
-    // synthesis for a different query, so they go with the checkpoint.
-    await rm(corpusPath, { force: true });
-    cp = {
-      configHash: hash,
-      stage: "fetching",
-      cursor: null,
-      overflowQueue: [],
-      maxUpdatedAt: null,
-      counters: {},
-    };
-  }
+  // JobManager normally resets before calling us; standalone callers get the same reset here.
+  if (!cp || cp.configHash !== hash) cp = await resetState(deps.stateDir, hash);
 
   const ingest: IngestCounters = { botCommentsStripped: counter(cp, "botCommentsStripped") };
   // GitHub timestamps are always `Z`; normalize an explicit --since offset so the

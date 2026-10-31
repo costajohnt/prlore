@@ -15,7 +15,7 @@ import { CandidateLearningSchema, type CandidateLearning } from "../schemas/cand
 import { CheckpointSchema, type Checkpoint } from "../schemas/checkpoint.js";
 import { DEFAULT_MAX_BUDGET_USD, type MineConfig } from "../schemas/mine-config.js";
 import type { ContestedItem, Provenance } from "../schemas/provenance.js";
-import { loadCheckpoint, saveCheckpoint } from "../state/checkpoint.js";
+import { loadCheckpoint, resetState, saveCheckpoint } from "../state/checkpoint.js";
 import { readCorpus } from "../state/corpus.js";
 import { cappedProvider } from "./capped-provider.js";
 import type { JobStatus } from "./registry.js";
@@ -215,10 +215,7 @@ export class JobManager implements JobManagerApi {
     // belongs to the self-flip that owns it (fetcher: fetching->extracting; extractor
     // sweep below: extracting->analyzing; synthesize: analyzing|synthesizing->ready-for-preview).
     let cp = await loadCheckpoint(deps.stateDir, now);
-    if (!cp || cp.configHash !== hash) {
-      cp = { configHash: hash, stage: "fetching", cursor: null, overflowQueue: [], maxUpdatedAt: null, counters: {} };
-      await saveCheckpoint(deps.stateDir, cp);
-    }
+    if (!cp || cp.configHash !== hash) cp = await resetState(deps.stateDir, hash, now);
     this.mergeStatus(job, { stage: cp.stage, counters: { ...cp.counters } });
     if (this.checkCancel(job)) return;
 

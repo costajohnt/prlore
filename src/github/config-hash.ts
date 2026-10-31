@@ -5,7 +5,9 @@ export function configHash(config: MineConfig): string {
   const identity: Record<string, unknown> = {
     repo: config.repo,
     baseUrl: config.baseUrl,
-    since: config.timeRange.since ?? null,
+    // Day granularity: `--days N` recomputes `since` from the clock every run, and a
+    // millisecond-fresh hash would reset (and quarantine) the corpus on every invocation.
+    since: config.timeRange.since ? config.timeRange.since.slice(0, 10) : null,
     maxPrs: config.timeRange.maxPrs,
   };
   // The authors filter changes WHICH PRs survive into the corpus, so switching

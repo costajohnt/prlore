@@ -123,7 +123,9 @@ function parseMineArgs(argv: string[], now: () => number): ParsedMineArgs {
     if (!Number.isFinite(days) || days <= 0) {
       throw new CliUsageError(`--days must be a positive number, got "${values.days as string}"`);
     }
-    since = new Date(now() - days * 24 * 60 * 60 * 1000).toISOString();
+    const d = new Date(now() - days * 24 * 60 * 60 * 1000);
+    d.setUTCHours(0, 0, 0, 0); // day-granular so repeated runs share a checkpoint
+    since = d.toISOString();
   }
 
   let maxBudgetUsd: number | undefined;
