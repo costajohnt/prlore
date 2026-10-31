@@ -144,8 +144,10 @@ test("provider throw: planDoc degrades to a deterministic score-desc plan that s
     },
   };
 
-  const { plan } = await planDoc(rules, "intent", emptyAreas, throwing);
+  const warnings: string[] = [];
+  const { plan } = await planDoc(rules, "intent", emptyAreas, throwing, warnings);
 
+  expect(warnings).toEqual(["plan fallback: model unavailable"]);
   expect(plan.title).toBe("Project conventions");
   expect(plan.perArea).toBe(false);
   expect(plan.sections).toHaveLength(1);

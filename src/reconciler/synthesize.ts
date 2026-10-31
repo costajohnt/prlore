@@ -134,15 +134,16 @@ export async function synthesize(
   if (counters.clusterFallbacks > 0) {
     warnings.push(`cluster fallback used for ${counters.clusterFallbacks} bucket(s)`);
   }
-  // Reconcile/plan fallbacks are invisible externally by design — a BudgetExceededError
-  // from either now rethrows (see reconcile.ts / select.ts) instead of degrading silently,
-  // and non-budget failures there keep their existing deterministic-fallback behavior.
+  // A BudgetExceededError from reconcile/plan rethrows (see reconcile.ts / select.ts);
+  // any other model failure keeps the deterministic fallback but is reported in `warnings`
+  // so a doc with no code corroboration never looks complete.
   const reconciled = await reconcileClusters(clusters, conflictPairs, patterns, {
     provider,
     git,
     repoPath,
     now,
     excludes,
+    warnings,
   });
   const merged = mergeCodeOnlyPatterns(reconciled, patterns);
 
@@ -207,7 +208,7 @@ export async function synthesize(
   const fullRules = tiered.filter((r) => r.renderedTier === "full");
   const tailRules = tiered.filter((r) => r.renderedTier === "compact");
 
-  const { plan, trimmedIds } = await planDoc(fullRules, config.intent, patterns.areas, provider);
+  const { plan, trimmedIds } = await planDoc(fullRules, config.intent, patterns.areas, provider, warnings);
 
   // Fix (renderedTier must match reality): select.ts's enforce()/trimToBudget can
   // silently drop full-tier rules from every planned section to hit its own

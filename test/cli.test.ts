@@ -707,3 +707,27 @@ test("an unknown --provider exits 2 and the error lists the new values", async (
   expect(code).toBe(2);
   expect(err()).toMatch(/github-models|ollama/);
 });
+
+// ---- warnings ------------------------------------------------------------------
+
+test("job warnings are printed to stderr; a reconcile fallback fails the run (exit 1) without writing", async () => {
+  const { stdout, stderr, err } = streams();
+  const manager = new ScriptedJobManager(
+    [readyStatus({ warnings: ["cluster fallback used for 1 bucket(s)", "reconcile fallback: 529 overloaded"] })],
+    { draft: mkDraft([]), provenance: mkProvenance([mkRule()]), contested: [] },
+  );
+  let confirmed = false;
+  const code = await runMineCli(baseArgv("o/r", await tmpRepo()), {
+    makeDeps,
+    manager,
+    stdout,
+    stderr,
+    confirm: async () => (confirmed = true),
+    pollIntervalMs: 0,
+  });
+  expect(code).toBe(1);
+  expect(err()).toContain("warning: cluster fallback used for 1 bucket(s)");
+  expect(err()).toContain("warning: reconcile fallback: 529 overloaded");
+  expect(err()).toContain("every rule is unobservable; not written");
+  expect(confirmed).toBe(false);
+});

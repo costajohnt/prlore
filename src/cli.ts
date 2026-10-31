@@ -298,6 +298,14 @@ export async function runMineCli(argv: string[], deps: CliDeps): Promise<number>
       `${result.contested.length} contested, spent $${(status.tokensSpentUsd ?? 0).toFixed(2)}\n`,
   );
 
+  for (const w of status.warnings ?? []) deps.stderr.write(`warning: ${w}\n`);
+  // A reconcile fallback means no probe ran and every rule is "unobservable": the preview
+  // above is for inspection only, and the run is a failure rather than a doc to ship.
+  if (status.warnings?.some((w) => w.startsWith("reconcile fallback:"))) {
+    deps.stderr.write("prlore: reconcile model call failed, every rule is unobservable; not written\n");
+    return 1;
+  }
+
   if (parsed.dryRun) {
     deps.stderr.write("dry run: not written\n");
     return 0;

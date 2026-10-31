@@ -147,6 +147,7 @@ export async function planDoc(
   intent: string,
   areas: PatternsModel["areas"],
   provider: ModelProvider,
+  warnings?: string[],
 ): Promise<PlanResult> {
   let draft: DocPlan;
   try {
@@ -158,6 +159,7 @@ export async function planDoc(
     });
   } catch (err) {
     if (err instanceof BudgetExceededError) throw err;
+    warnings?.push(`plan fallback: ${err instanceof Error ? err.message : String(err)}`);
     draft = fallbackDraft(rules);
   }
 
