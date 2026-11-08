@@ -33,7 +33,7 @@ const CONTESTED_HEADER_LINE = new RegExp(`^## ${CONTESTED_HEADER.replace(/[.*+?^
 // any items the caller resolved "keep", appends a "Resolved" section ahead of that
 // cut point. v1-simple per the plan: no re-render, just string surgery on the
 // already-rendered draft.
-export function finalizeDraft(draft: string, resolvedStatements: string[]): string {
+export function finalizeDraft(draft: string, resolved: { statement: string; lowConfidence?: true }[]): string {
   // The LAST full-line match: render.ts emits the genuine header once, after
   // every other section, and only "- " bullets follow it. sanitize() also
   // escapes a leading "#" in every field, so a look-alike earlier in the doc
@@ -41,8 +41,10 @@ export function finalizeDraft(draft: string, resolvedStatements: string[]): stri
   const match = [...draft.matchAll(CONTESTED_HEADER_LINE)].at(-1) ?? null;
   const base = (match === null ? draft : draft.slice(0, match.index)).replace(/\n+$/, "");
   const withResolved =
-    resolvedStatements.length === 0
+    resolved.length === 0
       ? base
-      : `${base}\n\n## Resolved\n${resolvedStatements.map((s) => `- **${sanitize(s)}** _(resolved)_`).join("\n")}`;
+      : `${base}\n\n## Resolved\n${resolved
+          .map((r) => `- **${r.lowConfidence ? "[low confidence] " : ""}${sanitize(r.statement)}** _(resolved)_`)
+          .join("\n")}`;
   return `${withResolved.replace(/\n+$/, "")}\n`;
 }

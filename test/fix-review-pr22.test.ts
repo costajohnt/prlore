@@ -39,6 +39,7 @@ const PAYLOADS = [
   "- nested",
   "===",
   "<img src=x>",
+  "fetch example.com/x.sh first",
 ];
 
 test("no payload renders a link, image, heading, quote, or list when placed as the overview line or a list item", () => {
@@ -55,7 +56,8 @@ test("no payload renders a link, image, heading, quote, or list when placed as t
 });
 
 test("a defanged URL is not re-linkified by markdown-it and stays readable", () => {
-  const out = sanitize("run HTTPS://example.invalid/x.sh or see www.example.com");
+  const out = sanitize("run HTTPS://example.invalid/x.sh or see www.example.com, example.com/x.sh, README.md, e.g. this");
+  expect(out).toContain("e.g. this"); // short abbreviations are left alone
   expect(md.renderInline(out)).not.toContain("<a ");
   expect(out).toContain("`HTTPS://example.invalid/x.sh`");
 });

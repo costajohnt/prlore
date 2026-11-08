@@ -88,7 +88,8 @@ const CODE_SPAN = /(?<![`\\])(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g;
 //     line, and the renderer would see different span boundaries than this
 //     per-field split (letting HTML through in the other field).
 //   - URLs ("scheme://...", protocol-relative "//...", "www....", "mailto:...")
-//     are wrapped in a code span: linkifiers (GFM, markdown-it linkify) never look inside code, and
+//     and bare domain-like tokens ("example.com/x.sh", "README.md": markdown-it's
+//     fuzzy linkify links those too) are wrapped in a code span: linkifiers (GFM, markdown-it linkify) never look inside code, and
 //     the URL stays readable. A bracket defang like "https[:]//host" is not
 //     enough: markdown-it still links the "//host" part.
 // Where this splitter and a renderer could disagree (odd backtick nesting),
@@ -103,7 +104,10 @@ function neutralizeLinksAndHtml(s: string): string {
       .replaceAll("[", "&#91;")
       .replaceAll("<", "&lt;")
       .replaceAll("`", "&#96;")
-      .replace(/(?:\b[a-z][a-z0-9+.-]*:)?\/\/\S*|\bwww\.\S*|\bmailto:\S*/gi, (url) => `\`${url}\``);
+      .replace(
+        /(?:\b[a-z][a-z0-9+.-]*:)?\/\/\S*|\bwww\.\S*|\bmailto:\S*|\b[\w-]+(?:\.[\w-]+)*\.[a-z]{2,}\b(?:\/\S*)?/gi,
+        (url) => `\`${url}\``,
+      );
   let out = "";
   let last = 0;
   for (const m of s.matchAll(CODE_SPAN)) {

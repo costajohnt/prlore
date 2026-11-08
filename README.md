@@ -284,8 +284,9 @@ script-built fixture git repo.
 - **Rendered text can't carry links or HTML.** Rule text, titles, headings and
   contested items have `[` and `<` escaped, URLs wrapped in code spans (so no
   linkifier, including markdown-it's, turns them into links), and line-start
-  markdown (headings, quotes, list markers) escaped. Bare domain names without
-  a scheme or `www.` are left as text.
+  markdown (headings, quotes, list markers) escaped. Domain-like tokens
+  such as `example.com/x.sh` or `README.md` are code-spanned too, since
+  markdown-it's linkify links bare domains.
 - **PR text is treated as untrusted data.** Titles, bodies, review comments,
   file names, and statements derived from them are fenced in delimited blocks
   in every model prompt, with an instruction that their content is never

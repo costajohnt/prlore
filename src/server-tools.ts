@@ -263,11 +263,7 @@ export function registerTools(
         // item) — filtering the full contested list against the keep-id set
         // already covers every occurrence, not just the first.
         const keepIds = new Set((resolveContested ?? []).filter((r) => r.action === "keep").map((r) => r.id));
-        const resolvedStatements = contested
-          .filter((item) => keepIds.has(item.id))
-          .map((item) => (item.lowConfidence ? `[low confidence] ${item.statement}` : item.statement));
-
-        const finalDraft = finalizeDraft(draft, resolvedStatements);
+        const finalDraft = finalizeDraft(draft, contested.filter((item) => keepIds.has(item.id)));
 
         let result;
         try {
