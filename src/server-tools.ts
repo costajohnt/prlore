@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { makeTransport, resolveToken, withRetry } from "./github/client.js";
-import { emitDraft, EmitRefusedError, type EmitTarget } from "./emitter/emit.js";
+import { emitDraft, EmitRefusedError, isConfinedOnDisk, type EmitTarget } from "./emitter/emit.js";
 import { finalizeDraft } from "./emitter/finalize.js";
 import { previewEmitMode, writePlanSummary } from "./emitter/mode.js";
 import type { JobDeps, JobManagerApi } from "./jobs/manager.js";
@@ -87,6 +87,10 @@ export function registerTools(
       try {
         const repoPath = repoPathIn ?? process.cwd();
         const stateDir = stateDirIn ?? join(repoPath, ".prlore");
+        const rel = relative(resolve(repoPath), resolve(stateDir));
+        if (rel === "" || rel.startsWith("..") || isAbsolute(rel) || !(await isConfinedOnDisk(repoPath, stateDir))) {
+          throw new Error("refusing stateDir: it must be a directory inside repoPath");
+        }
         const config = MineConfigSchema.parse(configFields);
         // MineConfigSchema accepts "sampling" (MCP sampling as a fallback when no
         // API key is configured) but v1 never wired that path — defaultMineDepsFactory

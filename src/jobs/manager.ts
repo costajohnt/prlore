@@ -15,6 +15,7 @@ import { CandidateLearningSchema, type CandidateLearning } from "../schemas/cand
 import { CheckpointSchema, type Checkpoint } from "../schemas/checkpoint.js";
 import { DEFAULT_MAX_BUDGET_USD, type MineConfig } from "../schemas/mine-config.js";
 import type { ContestedItem, Provenance } from "../schemas/provenance.js";
+import { assertNoSymlinks } from "../state/atomic.js";
 import { loadCheckpoint, resetState, saveCheckpoint } from "../state/checkpoint.js";
 import { readCorpus } from "../state/corpus.js";
 import { cappedProvider } from "./capped-provider.js";
@@ -117,6 +118,7 @@ export class JobManager implements JobManagerApi {
       throw new Error("a job is already running on this manager instance");
     }
 
+    assertNoSymlinks(deps.stateDir);
     const jobId = randomUUID();
     const hash = configHash(config);
     const existing = peekCheckpoint(deps.stateDir);

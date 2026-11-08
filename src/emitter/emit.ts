@@ -196,7 +196,7 @@ function isInsideRepo(repoPath: string, candidatePath: string): boolean {
 // or a root target that is itself a link), so before anything under the repo
 // is read or written, confirm that the nearest existing ancestor really lives
 // inside the repo and that the file itself, if present, is not a symlink.
-async function isConfinedOnDisk(repoPath: string, candidatePath: string): Promise<boolean> {
+export async function isConfinedOnDisk(repoPath: string, candidatePath: string): Promise<boolean> {
   try {
     if ((await lstat(candidatePath)).isSymbolicLink()) return false;
   } catch (err) {
