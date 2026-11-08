@@ -260,17 +260,26 @@ function partition(draft: Draft, size: number, units: Unit[]): Draft {
   return { groups, conflicts };
 }
 
+// Model-clustered levels per bucket. Each level has strictly fewer units, but a model
+// that merges only a pair or two per level could take ~n levels of calls; past the cap
+// the remaining groups are merged by exact statement and the run carries a warning.
+export const MAX_CLUSTER_LEVELS = 4;
+
+interface LevelCtx {
+  provider: ModelProvider;
+  batchSize: number;
+  onFallback: () => void;
+  onDepthCap: () => void;
+}
+
+const pairKey = (a: number, b: number) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+
 // Clusters `units`; when that took more than one call (batches, or halves of a batch
 // split after a truncated reply), units in different calls never met, so the resulting
 // groups' canonical statements are clustered again, recursively, and the members of
 // groups that merge are unioned. Each level has fewer units than the one below it.
-async function draftLevels(
-  units: Unit[],
-  provider: ModelProvider,
-  batchSize: number,
-  onFallback: () => void,
-): Promise<Draft> {
-  const { draft, calls } = await draftUnits(units, provider, batchSize, onFallback);
+async function draftLevels(units: Unit[], ctx: LevelCtx, level = 1): Promise<Draft> {
+  const { draft, calls } = await draftUnits(units, ctx.provider, ctx.batchSize, ctx.onFallback);
   if (calls <= 1) return draft;
   const lower = partition(draft, units.length, units);
   // ponytail: if no call merged anything, another level would see the same batches, so
@@ -281,10 +290,28 @@ async function draftLevels(
     statement: g.canonicalStatement,
     polarity: majorityPolarity(g.memberIndexes.map((i) => units[i]!)),
   }));
-  const upper = partition(await draftLevels(reps, provider, batchSize, onFallback), reps.length, reps);
+  let upperDraft: Draft;
+  if (level >= MAX_CLUSTER_LEVELS) {
+    ctx.onDepthCap();
+    upperDraft = fallbackDraft(reps);
+  } else {
+    upperDraft = await draftLevels(reps, ctx, level + 1);
+  }
+  const upper = partition(upperDraft, reps.length, reps);
+
+  // The upper call sees only canonical statements, not the conflicts found below it, so
+  // it can merge two sides of a known conflict into one cluster and hide it. Such a
+  // merge is undone: its lower groups stay separate and the conflict survives.
+  const lowerConflicts = new Set(lower.conflicts.map(([a, b]) => pairKey(a, b)));
+  const hidesConflict = (rs: number[]) => rs.some((a, i) => rs.slice(i + 1).some((b) => lowerConflicts.has(pairKey(a, b))));
+  const upperGroups: Group[] = upper.groups.flatMap((g) =>
+    hidesConflict(g.memberIndexes)
+      ? g.memberIndexes.map((r) => ({ memberIndexes: [r], canonicalStatement: reps[r]!.statement }))
+      : [g],
+  );
 
   const repToGroup: number[] = [];
-  const groups: Group[] = upper.groups.map((g, gi) => {
+  const groups: Group[] = upperGroups.map((g, gi) => {
     for (const r of g.memberIndexes) repToGroup[r] = gi;
     // An upper singleton keeps its lower statement and tag (made with the members in view).
     const only = g.memberIndexes.length === 1 ? lower.groups[g.memberIndexes[0]!]! : undefined;
@@ -294,17 +321,25 @@ async function draftLevels(
       generality: only ? only.generality : g.generality,
     };
   });
-  const conflicts: [number, number][] = [
-    ...upper.conflicts,
-    ...lower.conflicts.map(([a, b]): [number, number] => [repToGroup[a]!, repToGroup[b]!]),
-  ];
-  return { groups, conflicts };
+  // Upper conflicts index upper.groups, which a split may have broken up: re-express each
+  // through the reps on both sides. Lower conflicts map through their reps directly.
+  const conflicts = new Map<string, [number, number]>();
+  const add = (a: number, b: number) => {
+    if (a !== b) conflicts.set(pairKey(a, b), [a, b]);
+  };
+  for (const [ga, gb] of upper.conflicts) {
+    for (const ra of upper.groups[ga]!.memberIndexes) {
+      for (const rb of upper.groups[gb]!.memberIndexes) add(repToGroup[ra]!, repToGroup[rb]!);
+    }
+  }
+  for (const [a, b] of lower.conflicts) add(repToGroup[a]!, repToGroup[b]!);
+  return { groups, conflicts: [...conflicts.values()] };
 }
 
 export async function clusterCandidates(
   candidates: VerifiedCandidate[],
   provider: ModelProvider,
-  opts?: { counters?: { clusterFallbacks: number }; batchSize?: number },
+  opts?: { counters?: { clusterFallbacks: number; clusterDepthCaps?: number }; batchSize?: number },
 ): Promise<{ clusters: Cluster[]; conflictPairs: [number, number][] }> {
   const buckets = new Map<Cluster["category"], VerifiedCandidate[]>();
   for (const c of candidates) {
@@ -323,11 +358,20 @@ export async function clusterCandidates(
     if (!bucket || bucket.length === 0) continue;
 
     let fellBack = false;
+    let capped = false;
     const units = bucket.map((c) => ({ statement: c.statement, polarity: c.polarity }));
-    const draft = await draftLevels(units, provider, opts?.batchSize ?? CLUSTER_BATCH, () => {
-      fellBack = true;
+    const draft = await draftLevels(units, {
+      provider,
+      batchSize: opts?.batchSize ?? CLUSTER_BATCH,
+      onFallback: () => {
+        fellBack = true;
+      },
+      onDepthCap: () => {
+        capped = true;
+      },
     });
     if (fellBack && opts?.counters) opts.counters.clusterFallbacks++;
+    if (capped && opts?.counters) opts.counters.clusterDepthCaps = (opts.counters.clusterDepthCaps ?? 0) + 1;
 
     const assigned = new Set<number>();
     // undefined = this draft group produced no cluster (all its indexes were invalid).

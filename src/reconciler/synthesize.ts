@@ -14,7 +14,7 @@ import {
 } from "../schemas/provenance.js";
 import { atomicWriteFile } from "../state/atomic.js";
 import { loadCheckpoint, saveCheckpoint } from "../state/checkpoint.js";
-import { clusterCandidates } from "./cluster.js";
+import { clusterCandidates, MAX_CLUSTER_LEVELS } from "./cluster.js";
 import { dedupeAcrossBuckets } from "./dedupe.js";
 import { mergeCodeOnlyPatterns, reconcileClusters, type ReconciledRule } from "./reconcile.js";
 import { renderDraft } from "./render.js";
@@ -142,10 +142,15 @@ export async function synthesize(
   const warnings: string[] = [];
 
   const verified = verifyEvidence(candidates, prs);
-  const counters = { clusterFallbacks: 0 };
+  const counters = { clusterFallbacks: 0, clusterDepthCaps: 0 };
   const { clusters, conflictPairs } = await clusterCandidates(verified, provider, { counters });
   if (counters.clusterFallbacks > 0) {
     warnings.push(`cluster fallback used for ${counters.clusterFallbacks} bucket(s)`);
+  }
+  if (counters.clusterDepthCaps > 0) {
+    warnings.push(
+      `cluster depth cap (${MAX_CLUSTER_LEVELS} levels) reached for ${counters.clusterDepthCaps} bucket(s); the rest were grouped by exact statement`,
+    );
   }
   // A BudgetExceededError from reconcile/plan rethrows (see reconcile.ts / select.ts);
   // any other model failure keeps the deterministic fallback but is reported in `warnings`

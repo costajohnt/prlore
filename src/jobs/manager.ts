@@ -334,6 +334,7 @@ export class JobManager implements JobManagerApi {
     // Only a run with no model failure (every fallback is reported as a warning) drops
     // the saved replies; otherwise a re-run retries just the calls that failed.
     if (synthResult.warnings.length === 0) await rm(synthesisCache, { recursive: true, force: true });
+    else await synthesisProvider.prune();
 
     // DECISION (finished-before-cancel semantics): there is no checkCancel() between
     // the synthesize() await above and this point. If cancel() sets cancelRequested

@@ -123,7 +123,9 @@ export async function dedupeAcrossBuckets(
         schema: DedupeDraftSchema,
         maxTokens: 4096,
       });
-      return draft.mergeSets ?? [];
+      // A merge set may only name rules this batch showed the model (as reconcile does).
+      const shown = new Set(batch.map((r) => String(r.id)));
+      return (draft.mergeSets ?? []).filter((set) => (set.ids ?? []).every((id) => shown.has(String(id))));
     } catch (err) {
       if (err instanceof BudgetExceededError || err instanceof OutputTruncatedError) throw err;
       failed = true;
