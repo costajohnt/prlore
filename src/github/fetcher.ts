@@ -30,6 +30,8 @@ export interface FetchSummary {
   drifted: number;
   overflowRefetched: number;
   maxUpdatedAt: string | null;
+  /** Watermark of an incremental pass (null on a first fetch): only PRs updated after it were fetched. */
+  refreshedFrom: string | null;
 }
 
 const PR_FIELDS = `
@@ -112,6 +114,22 @@ export async function fetchCorpus(config: MineConfig, deps: FetchDeps): Promise<
   let cp = await loadCheckpoint(deps.stateDir);
   // JobManager normally resets before calling us; standalone callers get the same reset here.
   if (!cp || cp.configHash !== hash) cp = await resetState(deps.stateDir, hash);
+  if (cp.stage !== "fetching") {
+    // Re-run over an existing corpus: page newest-first again and stop at the previous
+    // pass's watermark, appending new and changed PRs (readCorpus dedups by number, last
+    // write wins; the extraction cache is keyed on updatedAt). Counters restart so `kept`
+    // is what this pass added and maxPrs caps this pass, not the corpus.
+    cp = { ...cp, stage: "fetching", cursor: null, refreshFrom: cp.maxUpdatedAt, counters: {} };
+    await saveCheckpoint(deps.stateDir, cp);
+  }
+  const refreshFrom = cp.refreshFrom ?? null;
+  // The pass re-reads PRs at the watermark's exact second (a PR updated in that second
+  // after the last pass's first page would otherwise be skipped forever), and an overflow
+  // refetch can already have stored a newer version; rows identical to the corpus are
+  // skipped so they don't count as new.
+  const stored = refreshFrom
+    ? new Set((await readCorpus(corpusPath)).prs.map((p) => `${p.number}|${p.updatedAt}`))
+    : new Set<string>();
 
   const ingest: IngestCounters = { botCommentsStripped: counter(cp, "botCommentsStripped") };
   // GitHub timestamps are always `Z`; normalize an explicit --since offset so the
@@ -134,7 +152,7 @@ export async function fetchCorpus(config: MineConfig, deps: FetchDeps): Promise<
       let sawTooOld = false;
       for (const node of res.repository.pullRequests.nodes) {
         if (counter(cp, "kept") >= maxPrs) break;
-        if (since && node.updatedAt < since) {
+        if ((since && node.updatedAt < since) || (refreshFrom && node.updatedAt < refreshFrom)) {
           sawTooOld = true;
           break;
         }
@@ -146,6 +164,10 @@ export async function fetchCorpus(config: MineConfig, deps: FetchDeps): Promise<
           // dedicated `droppedAuthor` counter for visibility into why.
           bump(cp, "dropped");
           bump(cp, "droppedAuthor");
+          continue;
+        }
+        if (result.kept && stored.has(`${result.pr.number}|${result.pr.updatedAt}`)) {
+          bump(cp, "unchanged");
           continue;
         }
         if (result.kept) {
@@ -190,6 +212,8 @@ export async function fetchCorpus(config: MineConfig, deps: FetchDeps): Promise<
         if (result.kept && authorMatches(result.pr.author, config.authors)) {
           await appendJsonl(corpusPath, result.pr);
           deps.onPr?.(result.pr);
+          // Never raise the watermark from a refetch: its updatedAt can postdate the first
+          // page, and PRs updated in between would sit below the watermark, unfetched.
         }
       }
       bump(cp, "overflowRefetched");
@@ -215,5 +239,6 @@ export async function fetchCorpus(config: MineConfig, deps: FetchDeps): Promise<
     drifted,
     overflowRefetched: counter(cp, "overflowRefetched"),
     maxUpdatedAt: cp.maxUpdatedAt,
+    refreshedFrom: refreshFrom,
   };
 }

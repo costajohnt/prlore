@@ -78,9 +78,20 @@ export const ContestedItemSchema = z.object({
 });
 export type ContestedItem = z.infer<typeof ContestedItemSchema>;
 
+// Corpus freshness: how many PRs this doc was synthesized from, the newest PR
+// updatedAt among them, and how many are new or changed since the last finished synthesis.
+export const CorpusInfoSchema = z.object({
+  prs: z.number().int().nonnegative(),
+  newestUpdatedAt: z.string().nullable(),
+  addedThisRun: z.number().int().nonnegative(),
+});
+export type CorpusInfo = z.infer<typeof CorpusInfoSchema>;
+
 export const ProvenanceSchema = z.object({
   generatedAt: z.string(),
   intent: z.string(),
+  // Additive, optional: absent on sidecars written before incremental re-mining.
+  corpus: CorpusInfoSchema.optional(),
   rules: z.array(RuleRecordSchema),
   dropped: z.array(RuleRecordSchema),
   contested: z.array(ContestedItemSchema),

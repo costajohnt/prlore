@@ -297,7 +297,9 @@ test("overflow refetch pass drops PRs from authors not in the filter", async () 
   const perPrResponses = {
     9: { rateLimit: rateLimit(), repository: { pullRequest: nonMatchingNode } },
   };
-  const { transport } = fakeTransport([], perPrResponses);
+  // A later-stage checkpoint starts an incremental pass first; serve it an empty page.
+  const emptyPage = { rateLimit: rateLimit(), repository: { pullRequests: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } };
+  const { transport } = fakeTransport([emptyPage], perPrResponses);
 
   const cp: Checkpoint = {
     configHash: configHash(config),
@@ -499,40 +501,6 @@ test("since stop", async () => {
   const { prs } = await readCorpus(join(stateDir, "corpus.jsonl"));
   expect(prs).toHaveLength(1);
   expect(prs[0]!.number).toBe(1);
-});
-
-test("does not regress a later-stage checkpoint when re-invoked", async () => {
-  const config = mkConfig();
-  const { stateDir } = await freshDeps();
-
-  const cp: Checkpoint = {
-    configHash: configHash(config),
-    stage: "synthesizing",
-    cursor: null,
-    overflowQueue: [],
-    maxUpdatedAt: "2026-06-01T00:00:00Z",
-    counters: { fetched: 4, kept: 4, dropped: 0 },
-  };
-  await saveCheckpoint(stateDir, cp);
-
-  const transport = (async (query: string) => {
-    if (query.includes("preflight")) {
-      return { viewer: { login: "me" }, repository: { nameWithOwner: "o/r" } };
-    }
-    throw new Error("should not be called");
-  }) as GqlTransport;
-  const calls: string[] = [];
-  const countingTransport = (async (query: string, variables: Record<string, unknown>) => {
-    calls.push(query);
-    return transport(query, variables);
-  }) as GqlTransport;
-
-  await fetchCorpus(config, { transport: countingTransport, throttle: quietThrottle(), stateDir });
-
-  expect(calls).toHaveLength(1);
-
-  const finalCp = await loadCheckpoint(stateDir);
-  expect(finalCp?.stage).toBe("synthesizing");
 });
 
 test("preflight failure aborts before any state write", async () => {

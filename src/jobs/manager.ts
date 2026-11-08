@@ -14,10 +14,10 @@ import { synthesize } from "../reconciler/synthesize.js";
 import { CandidateLearningSchema, type CandidateLearning } from "../schemas/candidate-learning.js";
 import { CheckpointSchema, type Checkpoint } from "../schemas/checkpoint.js";
 import { DEFAULT_MAX_BUDGET_USD, type MineConfig } from "../schemas/mine-config.js";
-import type { ContestedItem, Provenance } from "../schemas/provenance.js";
+import type { ContestedItem, CorpusInfo, Provenance } from "../schemas/provenance.js";
 import { assertNoSymlinks } from "../state/atomic.js";
 import { loadCheckpoint, resetState, saveCheckpoint } from "../state/checkpoint.js";
-import { readCorpus } from "../state/corpus.js";
+import { readCorpus, windowCorpus } from "../state/corpus.js";
 import { cappedProvider } from "./capped-provider.js";
 import { resumableProvider } from "./resumable-provider.js";
 import type { JobStatus } from "./registry.js";
@@ -273,8 +273,18 @@ export class JobManager implements JobManagerApi {
     // THIS run; a resumed run may have PRs already on disk from a prior invocation
     // that never streamed through this fresh Extractor instance. Enqueue them too —
     // Extractor's own (number|updatedAt) dedup absorbs the overlap with the stream for free.
-    const { prs } = await readCorpus(join(deps.stateDir, "corpus.jsonl"));
+    // windowCorpus re-applies since/maxPrs, since incremental re-runs grow the corpus.
+    const prs = windowCorpus((await readCorpus(join(deps.stateDir, "corpus.jsonl"))).prs, config);
     for (const pr of prs) extractor.enqueue(pr);
+    // New or changed since the last finished synthesis, not just since this run's fetch
+    // started: a run that crashed after fetching left its PRs un-synthesized.
+    const synthesizedThrough = cpAfterFetch?.synthesizedThrough ?? null;
+    const corpus: CorpusInfo = {
+      prs: prs.length,
+      newestUpdatedAt: prs.reduce<string | null>((max, p) => (!max || p.updatedAt > max ? p.updatedAt : max), null),
+      addedThisRun: prs.filter((p) => !synthesizedThrough || p.updatedAt > synthesizedThrough).length,
+    };
+    this.mergeStatus(job, { corpus });
     const extractSummary = await extractor.drain();
     this.mergeStatus(job, { counters: { ...job.status.counters, ...numericCounters(extractSummary) } });
 
@@ -289,6 +299,10 @@ export class JobManager implements JobManagerApi {
     }
     if (extractSummary.prsSeen === 0) {
       warnings.push("no PRs processed — corpus empty or config too narrow");
+    } else if (fetchSummary.refreshedFrom !== null && corpus.addedThisRun === 0) {
+      warnings.push(
+        `corpus unchanged: no PRs updated since ${fetchSummary.refreshedFrom}; re-synthesized over the existing ${prs.length} PR(s)`,
+      );
     }
     this.mergeStatus(job, { warnings });
 
@@ -319,6 +333,7 @@ export class JobManager implements JobManagerApi {
         now,
         stateDir: deps.stateDir,
         excludes: defaultExcludes(config),
+        corpus,
       });
     } catch (err) {
       const reason =
@@ -335,6 +350,8 @@ export class JobManager implements JobManagerApi {
     // the saved replies; otherwise a re-run retries just the calls that failed.
     if (synthResult.warnings.length === 0) await rm(synthesisCache, { recursive: true, force: true });
     else await synthesisProvider.prune();
+    const cpDone = await loadCheckpoint(deps.stateDir, now);
+    if (cpDone) await saveCheckpoint(deps.stateDir, { ...cpDone, synthesizedThrough: corpus.newestUpdatedAt });
 
     // DECISION (finished-before-cancel semantics): there is no checkCancel() between
     // the synthesize() await above and this point. If cancel() sets cancelRequested
