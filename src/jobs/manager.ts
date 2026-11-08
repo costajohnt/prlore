@@ -230,6 +230,7 @@ export class JobManager implements JobManagerApi {
       deps.provider,
       synthesisCache,
       `${config.model.provider}|${config.model.model ?? ""}`,
+      (w) => this.mergeStatus(job, { warnings: [...(job.status.warnings ?? []), w] }),
     );
 
     // Step 1: analyze() FIRST. Cheap, one LLM call — reserves budget before the
@@ -349,6 +350,7 @@ export class JobManager implements JobManagerApi {
     // Only a run with no model failure (every fallback is reported as a warning) drops
     // the saved replies; otherwise a re-run retries just the calls that failed.
     if (synthResult.warnings.length === 0) await rm(synthesisCache, { recursive: true, force: true });
+    else await synthesisProvider.prune();
     const cpDone = await loadCheckpoint(deps.stateDir, now);
     if (cpDone) await saveCheckpoint(deps.stateDir, { ...cpDone, synthesizedThrough: corpus.newestUpdatedAt });
 
