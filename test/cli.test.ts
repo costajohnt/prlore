@@ -731,7 +731,7 @@ test("job warnings are printed to stderr; a reconcile fallback fails the run (ex
   expect(code).toBe(1);
   expect(err()).toContain("warning: cluster fallback used for 1 bucket(s)");
   expect(err()).toContain("warning: reconcile fallback: 529 overloaded");
-  expect(err()).toContain("every rule is unobservable; not written");
+  expect(err()).toContain("rules in a failed batch are unobservable; not written");
   expect(confirmed).toBe(false);
 });
 

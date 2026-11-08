@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { BudgetExceededError, type CompleteOptions, type ModelProvider } from "./provider.js";
+import { BudgetExceededError, OutputTruncatedError, type CompleteOptions, type ModelProvider } from "./provider.js";
 import { appendSchemaHint } from "./schema-hint.js";
 
 const DEFAULT_MODEL = "claude-sonnet-5";
@@ -17,7 +17,7 @@ interface MessagesClient {
     create(params: {
       model: string; max_tokens: number; system?: string;
       messages: { role: "user"; content: string }[];
-    }): Promise<{ content: { type: string; text?: string }[]; usage: Usage }>;
+    }): Promise<{ content: { type: string; text?: string }[]; usage: Usage; stop_reason?: string | null }>;
   };
 }
 
@@ -61,6 +61,7 @@ export class AnthropicProvider implements ModelProvider {
         messages: [{ role: "user", content }],
       });
       this.track(model, res.usage);
+      if (res.stop_reason === "max_tokens") throw new OutputTruncatedError(maxTokens);
       const text = res.content.filter((b) => b.type === "text").map((b) => b.text ?? "").join("");
       try {
         return schema.parse(JSON.parse(extractJson(text)));

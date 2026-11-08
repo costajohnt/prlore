@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { analyze } from "../analyzer/analyze.js";
 import { realGit, type GitRunner } from "../analyzer/git.js";
@@ -19,6 +19,7 @@ import { assertNoSymlinks } from "../state/atomic.js";
 import { loadCheckpoint, resetState, saveCheckpoint } from "../state/checkpoint.js";
 import { readCorpus } from "../state/corpus.js";
 import { cappedProvider } from "./capped-provider.js";
+import { resumableProvider } from "./resumable-provider.js";
 import type { JobStatus } from "./registry.js";
 
 export type { JobStatus };
@@ -221,10 +222,20 @@ export class JobManager implements JobManagerApi {
     this.mergeStatus(job, { stage: cp.stage, counters: { ...cp.counters } });
     if (this.checkCancel(job)) return;
 
+    // analyze and synthesize go through a provider that saves each reply, so a run that
+    // fails mid-synthesis resumes on re-run without re-paying the calls that finished.
+    // (Extraction has its own per-PR cache.)
+    const synthesisCache = join(deps.stateDir, "synthesis-cache");
+    const synthesisProvider = resumableProvider(
+      deps.provider,
+      synthesisCache,
+      `${config.model.provider}|${config.model.model ?? ""}`,
+    );
+
     // Step 1: analyze() FIRST. Cheap, one LLM call — reserves budget before the
     // (much more expensive) per-PR extraction pass gets a chance to spend it.
     const patterns = await analyze(deps.repoPath, config, {
-      provider: deps.provider,
+      provider: synthesisProvider,
       git,
       now,
       stateDir: deps.stateDir,
@@ -302,7 +313,7 @@ export class JobManager implements JobManagerApi {
     let synthResult: Awaited<ReturnType<typeof synthesize>>;
     try {
       synthResult = await synthesize(config, patterns, candidates, prs, {
-        provider: deps.provider,
+        provider: synthesisProvider,
         repoPath: deps.repoPath,
         git,
         now,
@@ -310,15 +321,19 @@ export class JobManager implements JobManagerApi {
         excludes: defaultExcludes(config),
       });
     } catch (err) {
-      if (err instanceof BudgetExceededError) {
-        this.mergeStatus(job, {
-          state: "failed",
-          error: `model budget exhausted during synthesis: $${err.spentUsd.toFixed(2)} of $${err.capUsd.toFixed(2)} cap`,
-        });
-        return;
-      }
-      throw err;
+      const reason =
+        err instanceof BudgetExceededError
+          ? `model budget exhausted during synthesis: $${err.spentUsd.toFixed(2)} of $${err.capUsd.toFixed(2)} cap`
+          : `synthesis failed: ${err instanceof Error ? err.message : String(err)}`;
+      this.mergeStatus(job, {
+        state: "failed",
+        error: `${reason}. Extraction and finished synthesis calls are saved in ${deps.stateDir}; re-run mine to resume`,
+      });
+      return;
     }
+    // Only a run with no model failure (every fallback is reported as a warning) drops
+    // the saved replies; otherwise a re-run retries just the calls that failed.
+    if (synthResult.warnings.length === 0) await rm(synthesisCache, { recursive: true, force: true });
 
     // DECISION (finished-before-cancel semantics): there is no checkCancel() between
     // the synthesize() await above and this point. If cancel() sets cancelRequested

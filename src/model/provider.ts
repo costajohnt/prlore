@@ -20,3 +20,15 @@ export class BudgetExceededError extends Error {
     this.name = "BudgetExceededError";
   }
 }
+
+/**
+ * The model stopped because it hit the output-token cap, so its reply is cut off.
+ * Providers throw this instead of a schema retry: resending the same prompt with the
+ * same cap truncates again. Synthesis splits the batch and retries smaller halves.
+ */
+export class OutputTruncatedError extends Error {
+  constructor(readonly maxTokens: number) {
+    super(`model output truncated at the ${maxTokens}-token output cap`);
+    this.name = "OutputTruncatedError";
+  }
+}

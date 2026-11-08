@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { BudgetExceededError, type ModelProvider } from "../model/provider.js";
+import { BudgetExceededError, OutputTruncatedError, type ModelProvider } from "../model/provider.js";
+import { inBatches } from "./batch.js";
 import { GeneralitySchema, type EvidenceRecord, type Generality } from "../schemas/provenance.js";
 import type { VerifiedCandidate } from "./verify-evidence.js";
 import { UNTRUSTED_DATA_RULE, untrustedFence } from "../util/untrusted.js";
@@ -37,7 +38,6 @@ const ClusterDraftSchema = z.object({
   ),
 });
 type ClusterDraft = z.infer<typeof ClusterDraftSchema>;
-type DraftGroup = ClusterDraft["groups"][number];
 
 const SYSTEM = `You group candidate engineering conventions that assert the SAME underlying norm.
 Two candidates belong in the same group only if they state the same rule about the same topic,
@@ -151,10 +151,10 @@ function buildCluster(
 // signal at all (the provider call itself failed), and back-compat default treats a
 // missing tag as no-penalty anyway — setting it explicitly just documents that these
 // groups were never model-tagged rather than leaving it ambiguous with a real tag.
-function fallbackDraft(bucket: VerifiedCandidate[]): ClusterDraft {
-  const groups: DraftGroup[] = [];
+function fallbackDraft(units: Unit[]): Draft {
+  const groups: Group[] = [];
   const indexByKey = new Map<string, number>();
-  bucket.forEach((c, i) => {
+  units.forEach((c, i) => {
     const key = normalize(c.statement);
     const gi = indexByKey.get(key);
     if (gi === undefined) {
@@ -164,13 +164,146 @@ function fallbackDraft(bucket: VerifiedCandidate[]): ClusterDraft {
       groups[gi]!.memberIndexes.push(i);
     }
   });
-  return { groups };
+  return { groups, conflicts: [] };
+}
+
+// Audit 2026-11-07 deep H2: one cluster call per bucket overflowed the 4096-token output
+// cap at roughly 100 groups. Buckets are now clustered in batches of CLUSTER_BATCH, then
+// the batch groups' canonical statements are clustered again (level 2) so the same norm
+// split across batches still merges.
+export const CLUSTER_BATCH = 60;
+
+// What one cluster call sees: a statement and its polarity.
+interface Unit {
+  statement: string;
+  polarity: Cluster["polarity"];
+}
+// A group indexes into the units of the call that made it; conflicts are pairs of group
+// indexes. Unlike ClusterDraft, generality is optional (singletons carry none).
+interface Group {
+  memberIndexes: number[];
+  canonicalStatement: string;
+  generality?: Generality;
+}
+interface Draft {
+  groups: Group[];
+  conflicts: [number, number][];
+}
+
+// One model draft, with indexes checked against this call's own units and shifted by
+// `offset` so drafts from consecutive batches can be concatenated.
+function toDraft(model: ClusterDraft, size: number, offset: number): Draft {
+  const groups = model.groups.map(({ memberIndexes, canonicalStatement, generality }) => ({
+    memberIndexes: memberIndexes.filter((i) => i < size).map((i) => i + offset),
+    canonicalStatement,
+    generality,
+  }));
+  const conflicts: [number, number][] = [];
+  model.groups.forEach((g, gi) => {
+    const other = g.conflictsWithGroup;
+    if (other !== undefined && other !== gi && other < model.groups.length) conflicts.push([gi, other]);
+  });
+  return { groups, conflicts };
+}
+
+function concatDrafts(drafts: Draft[]): Draft {
+  const out: Draft = { groups: [], conflicts: [] };
+  for (const d of drafts) {
+    const base = out.groups.length;
+    out.groups.push(...d.groups);
+    out.conflicts.push(...d.conflicts.map(([a, b]): [number, number] => [a + base, b + base]));
+  }
+  return out;
+}
+
+async function draftUnits(
+  units: Unit[],
+  provider: ModelProvider,
+  batchSize: number,
+  onFallback: () => void,
+): Promise<{ draft: Draft; calls: number }> {
+  const drafts = await inBatches(units, batchSize, async (batch, offset) => {
+    try {
+      const prompt = untrustedFence()(batch.map((c, i) => `[${i}] ${c.statement} (${c.polarity})`).join("\n"));
+      const model = await provider.complete({ system: SYSTEM, prompt, schema: ClusterDraftSchema, maxTokens: 4096 });
+      return [toDraft(model, batch.length, offset)];
+    } catch (err) {
+      // Budget exhaustion means every remaining call fails the same way, and a truncated
+      // reply is split and retried by inBatches; neither may be masked by a fallback.
+      if (err instanceof BudgetExceededError || err instanceof OutputTruncatedError) throw err;
+      onFallback();
+      const fb = fallbackDraft(batch);
+      return [{ ...fb, groups: fb.groups.map((g) => ({ ...g, memberIndexes: g.memberIndexes.map((i) => i + offset) })) }];
+    }
+  });
+  return { draft: concatDrafts(drafts), calls: drafts.length };
+}
+
+// Turns a draft over `size` units into a disjoint partition (first claim wins, empty
+// groups dropped, every unclaimed unit its own singleton), remapping its conflicts.
+function partition(draft: Draft, size: number, units: Unit[]): Draft {
+  const assigned = new Set<number>();
+  const groups: Group[] = [];
+  const remap: (number | undefined)[] = draft.groups.map((g) => {
+    const memberIndexes = validMemberIndexes(g.memberIndexes, size, assigned);
+    if (memberIndexes.length === 0) return undefined;
+    for (const i of memberIndexes) assigned.add(i);
+    groups.push({ ...g, memberIndexes });
+    return groups.length - 1;
+  });
+  for (let i = 0; i < size; i++) {
+    if (!assigned.has(i)) groups.push({ memberIndexes: [i], canonicalStatement: units[i]!.statement });
+  }
+  const conflicts = draft.conflicts
+    .map(([a, b]) => [remap[a], remap[b]])
+    .filter((p): p is [number, number] => p[0] !== undefined && p[1] !== undefined);
+  return { groups, conflicts };
+}
+
+async function draftBucket(
+  bucket: VerifiedCandidate[],
+  provider: ModelProvider,
+  batchSize: number,
+  onFallback: () => void,
+): Promise<Draft> {
+  const units = bucket.map((c) => ({ statement: c.statement, polarity: c.polarity }));
+  const { draft: level1, calls } = await draftUnits(units, provider, batchSize, onFallback);
+  if (calls <= 1) return level1;
+
+  // Level 2: candidates in different batches (including halves of a batch split after a
+  // truncated reply) never met, so cluster the level-1 groups' canonical statements and
+  // union the members of groups that merge.
+  // ponytail: two levels only; past batchSize^2 candidates in one category, groups that
+  // land in different level-2 batches stay separate (dedupe may still merge them).
+  const l1 = partition(level1, units.length, units);
+  const reps = l1.groups.map((g) => ({
+    statement: g.canonicalStatement,
+    polarity: majorityPolarity(g.memberIndexes.map((i) => bucket[i]!)),
+  }));
+  const l2 = partition((await draftUnits(reps, provider, batchSize, onFallback)).draft, reps.length, reps);
+
+  const repToGroup: number[] = [];
+  const groups: Group[] = l2.groups.map((g, gi) => {
+    for (const r of g.memberIndexes) repToGroup[r] = gi;
+    // A level-2 singleton keeps its level-1 statement and tag (made with full statements in view).
+    const only = g.memberIndexes.length === 1 ? l1.groups[g.memberIndexes[0]!]! : undefined;
+    return {
+      memberIndexes: g.memberIndexes.flatMap((r) => l1.groups[r]!.memberIndexes),
+      canonicalStatement: only?.canonicalStatement ?? g.canonicalStatement,
+      generality: only ? only.generality : g.generality,
+    };
+  });
+  const conflicts: [number, number][] = [
+    ...l2.conflicts,
+    ...l1.conflicts.map(([a, b]): [number, number] => [repToGroup[a]!, repToGroup[b]!]),
+  ];
+  return { groups, conflicts };
 }
 
 export async function clusterCandidates(
   candidates: VerifiedCandidate[],
   provider: ModelProvider,
-  opts?: { counters?: { clusterFallbacks: number } },
+  opts?: { counters?: { clusterFallbacks: number }; batchSize?: number },
 ): Promise<{ clusters: Cluster[]; conflictPairs: [number, number][] }> {
   const buckets = new Map<Cluster["category"], VerifiedCandidate[]>();
   for (const c of candidates) {
@@ -188,25 +321,11 @@ export async function clusterCandidates(
     const bucket = buckets.get(category);
     if (!bucket || bucket.length === 0) continue;
 
-    let draft: ClusterDraft;
-    let usedFallback = false;
-    try {
-      const prompt = untrustedFence()(bucket.map((c, i) => `[${i}] ${c.statement} (${c.polarity})`).join("\n"));
-      draft = await provider.complete({
-        system: SYSTEM,
-        prompt,
-        schema: ClusterDraftSchema,
-        maxTokens: 4096,
-      });
-    } catch (err) {
-      // Budget exhaustion is not a transient/degradable failure like a flaky model
-      // response — it means every remaining call in this run will fail the same
-      // way, so silently falling back per-bucket would just mask the real problem.
-      if (err instanceof BudgetExceededError) throw err;
-      usedFallback = true;
-      draft = fallbackDraft(bucket);
-      if (opts?.counters) opts.counters.clusterFallbacks++;
-    }
+    let fellBack = false;
+    const draft = await draftBucket(bucket, provider, opts?.batchSize ?? CLUSTER_BATCH, () => {
+      fellBack = true;
+    });
+    if (fellBack && opts?.counters) opts.counters.clusterFallbacks++;
 
     const assigned = new Set<number>();
     // undefined = this draft group produced no cluster (all its indexes were invalid).
@@ -236,20 +355,14 @@ export async function clusterCandidates(
       clusters.push(buildCluster(id, c.statement, category, [c]));
     }
 
-    if (!usedFallback) {
-      draft.groups.forEach((group, gi) => {
-        if (group.conflictsWithGroup === undefined) return;
-        const otherGi = group.conflictsWithGroup;
-        if (otherGi === gi) return; // self-pair
-        if (otherGi < 0 || otherGi >= draft.groups.length) return; // out-of-range group
-        const idA = groupGlobalIds[gi];
-        const idB = groupGlobalIds[otherGi];
-        if (idA === undefined || idB === undefined) return; // references a group with no surviving cluster
-        const key = idA < idB ? `${idA}|${idB}` : `${idB}|${idA}`;
-        if (seenPairKeys.has(key)) return;
-        seenPairKeys.add(key);
-        conflictPairs.push([idA, idB]);
-      });
+    for (const [gi, otherGi] of draft.conflicts) {
+      const idA = groupGlobalIds[gi];
+      const idB = groupGlobalIds[otherGi];
+      if (idA === undefined || idB === undefined || idA === idB) continue; // no surviving cluster, or merged into one
+      const key = idA < idB ? `${idA}|${idB}` : `${idB}|${idA}`;
+      if (seenPairKeys.has(key)) continue;
+      seenPairKeys.add(key);
+      conflictPairs.push([idA, idB]);
     }
   }
 

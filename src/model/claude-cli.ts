@@ -69,6 +69,10 @@ export class ClaudeCliProvider implements ModelProvider {
     return this.opts.maxBudgetUsd;
   }
 
+  // maxTokens is ignored: `claude -p` has no output-cap flag and its JSON envelope is
+  // not read for a stop reason here, so OutputTruncatedError is never raised. A cut-off
+  // reply surfaces as "failed schema validation twice", which synthesis treats as an
+  // ordinary model failure (fallback + warning), not as a reason to split the batch.
   async complete<T>({ system, prompt, schema }: CompleteOptions<T>): Promise<T> {
     let lastError = "";
     for (let attempt = 0; attempt < 2; attempt++) {
