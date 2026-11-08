@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.1](https://github.com/costajohnt/prlore/compare/v0.6.0...v0.6.1) (2026-11-08)
+
+
+### Bug Fixes
+
+* batch synthesis calls, detect truncated replies, and resume a failed synthesis ([#24](https://github.com/costajohnt/prlore/issues/24)) ([d192b19](https://github.com/costajohnt/prlore/commit/d192b19016568f762c6c1962fa5ac1b239ece275))
+* cap recursive clustering, keep lower-level conflicts, and bound the synthesis cache ([#26](https://github.com/costajohnt/prlore/issues/26)) ([0ee79c2](https://github.com/costajohnt/prlore/commit/0ee79c28248ef43e60229c21ec5e014067e4f2da))
+* re-running mine fetches PRs updated since the last run ([#23](https://github.com/costajohnt/prlore/issues/23)) ([9496996](https://github.com/costajohnt/prlore/commit/949699643ef016379ee090aed0b116598896fbd5))
+
 ## [0.6.0](https://github.com/costajohnt/prlore/compare/v0.5.1...v0.6.0) (2026-11-08)
 
 
