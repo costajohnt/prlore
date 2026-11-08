@@ -281,12 +281,13 @@ script-built fixture git repo.
   steered the extraction. A kept one is written with a `[low confidence]`
   marker. Over MCP, `write` keeps one only when its id is listed with
   `action: "keep"`, and echoes every kept one back as `keptLowConfidence`.
-- **Rendered text can't carry links or HTML.** Rule text, titles, headings and
-  contested items have `[` and `<` escaped, URLs wrapped in code spans (so no
-  linkifier, including markdown-it's, turns them into links), and line-start
-  markdown (headings, quotes, list markers) escaped. Domain-like tokens
-  such as `example.com/x.sh` or `README.md` are code-spanned too, since
-  markdown-it's linkify links bare domains.
+- **Rendered text can't carry markdown structure, links, or HTML.** In rule
+  text, titles, headings and contested items every ASCII punctuation character
+  is backslash-escaped (so the raw file reads `Don\'t use \`any\``, and code
+  renders as plain text), `&` becomes `&amp;`, and anything a linkifier would
+  link (URLs, bare or Unicode domains, emails, IPs, as found by linkify-it) has
+  its `.`, `:`, `/` and `@` entity-encoded. Control and bidi characters are
+  stripped, and the same stripping applies to contested lines on CLI stderr.
 - **PR text is treated as untrusted data.** Titles, bodies, review comments,
   file names, and statements derived from them are fenced in delimited blocks
   in every model prompt, with an instruction that their content is never
