@@ -97,23 +97,50 @@ const CODE_SPAN = /(?<![`\\])(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g;
 // Finally, a field may be rendered at the start of a line or list item, so a
 // leading block marker (heading, quote, list, setext/thematic break, table,
 // fence) is backslash-escaped.
+const URL_LIKE =
+  /(?:\b[a-z][a-z0-9+.-]*:)?\/\/\S*|\bwww\.\S*|\bmailto:\S*|\b[\w-]+(?:\.[\w-]+)*\.[a-z]{2,}\b(?:\/\S*)?/gi;
+
+const escapeText = (t: string): string =>
+  t.replaceAll("](", "] (").replaceAll("[", "&#91;").replaceAll("<", "&lt;").replaceAll("`", "&#96;");
+
 function neutralizeLinksAndHtml(s: string): string {
-  const neutralize = (t: string): string =>
-    t
-      .replaceAll("](", "] (")
-      .replaceAll("[", "&#91;")
-      .replaceAll("<", "&lt;")
-      .replaceAll("`", "&#96;")
-      .replace(
-        /(?:\b[a-z][a-z0-9+.-]*:)?\/\/\S*|\bwww\.\S*|\bmailto:\S*|\b[\w-]+(?:\.[\w-]+)*\.[a-z]{2,}\b(?:\/\S*)?/gi,
-        (url) => `\`${url}\``,
-      );
-  let out = "";
+  // Build the field as parts, recording every code span we intend the
+  // renderer to see: the input's own balanced spans plus our URL wrappers.
+  const parts: string[] = [];
+  const spans: string[] = [];
+  const pushSpan = (span: string) => {
+    // Two spans touching ("`a``url`") would merge into one longer backtick
+    // run and change every boundary after it; keep them apart with a space.
+    // Escaped text never contains a backtick, so this is the only adjacency.
+    if (parts.at(-1)?.endsWith("`")) parts.push(" ");
+    parts.push(span);
+    spans.push(span);
+  };
+  const pushText = (t: string) => {
+    const escaped = escapeText(t);
+    let last = 0;
+    for (const m of escaped.matchAll(URL_LIKE)) {
+      if (m.index > last) parts.push(escaped.slice(last, m.index));
+      pushSpan(`\`${m[0]}\``);
+      last = m.index + m[0].length;
+    }
+    if (escaped.length > last) parts.push(escaped.slice(last));
+  };
   let last = 0;
   for (const m of s.matchAll(CODE_SPAN)) {
-    out += neutralize(s.slice(last, m.index)) + m[0];
+    pushText(s.slice(last, m.index));
+    pushSpan(m[0]);
     last = m.index + m[0].length;
   }
-  out += neutralize(s.slice(last));
+  pushText(s.slice(last));
+  let out = parts.join("");
+
+  // Self-check: re-parse the result and require exactly the spans we built.
+  // If anything differs, fall back to no code spans at all: every backtick
+  // escaped, and URL dots/slashes entity-encoded so no linkifier sees a host.
+  const reparsed = [...out.matchAll(CODE_SPAN)].map((m) => m[0]);
+  if (reparsed.length !== spans.length || reparsed.some((sp, i) => sp !== spans[i])) {
+    out = escapeText(s).replace(URL_LIKE, (url) => url.replaceAll(".", "&#46;").replaceAll("/", "&#47;"));
+  }
   return out.replace(/^[#>+\-*=|_~]/, "\\$&").replace(/^(\d{1,9})([.)])/, "$1\\$2");
 }

@@ -112,3 +112,19 @@ test("an existing .prlore/.gitignore is never overwritten", async () => {
   expect(await readFile(join(repo, ".prlore", ".gitignore"), "utf8")).toBe("mine\n");
   expect(result.pathsWritten).not.toContain(join(repo, ".prlore", ".gitignore"));
 });
+
+test("a URL right next to an existing code span (same field or adjacent field) can't merge backtick runs", () => {
+  for (const field of ["`a`https://example.invalid/x", "https://example.invalid/x`a`", "`a`https://example.invalid`b`"]) {
+    const out = sanitize(field);
+    const html = md.renderInline(out);
+    expect(html, field).not.toContain("<a ");
+    expect(html, field).toContain("<code>a</code>");
+    expect(html, field).toMatch(/<code>https:\/\/example\.invalid(\/x)?<\/code>/);
+  }
+  // Adjacent fields on one rendered line: "**A** — B".
+  const line = `- **${sanitize("see https://example.invalid")}** — ${sanitize("`b` then <img src=x>")}`;
+  const html = md.render(line);
+  expect(html).not.toMatch(/<a |<img/);
+  expect(html).toContain("<code>https://example.invalid</code>");
+  expect(html).toContain("<code>b</code>");
+});
