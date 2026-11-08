@@ -82,6 +82,11 @@ const CODE_SPAN = /(?<![`\\])(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g;
 //   - "<" is escaped, killing HTML tags and <scheme:...> autolinks;
 //   - "scheme://" and "www." are defanged so GFM bare-URL autolinks don't fire.
 // The text stays readable; the URL is still visible, just not clickable.
+//   - any backtick NOT part of a span matched here becomes "&#96;", so every
+//     field's spans are balanced on their own. Without this, a stray backtick
+//     in one field could pair with one in the next field rendered on the same
+//     line, and the renderer would see different span boundaries than this
+//     per-field split (letting HTML through in the other field).
 // Where this splitter and a renderer could disagree (odd backtick nesting),
 // the splitter errs toward treating text as NOT code, i.e. over-escaping.
 function neutralizeLinksAndHtml(s: string): string {
@@ -89,6 +94,7 @@ function neutralizeLinksAndHtml(s: string): string {
     t
       .replaceAll("](", "] (")
       .replaceAll("<", "&lt;")
+      .replaceAll("`", "&#96;")
       .replace(/\b([a-z][a-z0-9+.-]*):\/\//gi, "$1[:]//")
       .replace(/\bwww\./gi, "www[.]");
   let out = "";

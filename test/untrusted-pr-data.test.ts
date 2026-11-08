@@ -173,3 +173,16 @@ test("sanitize leaves code spans verbatim but does not trust escaped or unbalanc
   // Mismatched fence lengths are not a code span either.
   expect(sanitize("`<b>x``")).not.toContain("<b>");
 });
+
+test("an unbalanced backtick in one field can't pair with a backtick in the next field on the same line", () => {
+  // Rendered as "- **A** — B": a stray backtick at the end of A must not open a
+  // span that closes on B's first backtick and pushes B's <img> out of its span.
+  const a = sanitize("p` q `<img>`");
+  const b = sanitize("x`<img src=x>`");
+  const line = `- **${a}** — ${b}`;
+  // Every live backtick left on the line belongs to a span balanced within one field.
+  expect(a.split("`").length - 1).toBe(2);
+  expect(b.split("`").length - 1).toBe(2);
+  expect(line).not.toMatch(/<img(?![^`]*`)/); // no <img outside a code span
+  expect(a).toContain("&#96;");
+});
