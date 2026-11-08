@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.6.0](https://github.com/costajohnt/prlore/compare/v0.5.1...v0.6.0) (2026-11-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* prlore no longer writes the mined doc into AGENTS.md directly. It writes .prlore/AGENTS.md and a pointer block in AGENTS.md, and migrates an existing root managed block on the next write. The MCP preview output drops the `mode` field.
+
+### Features
+
+* fence untrusted PR text, flag weakly-bound rules, always write via pointer ([#22](https://github.com/costajohnt/prlore/issues/22)) ([4ad8235](https://github.com/costajohnt/prlore/commit/4ad8235f2d7215241126683125f376168c2a4ef5))
+
+
+### Bug Fixes
+
+* stop state writes from following symlinks in a mined checkout ([#20](https://github.com/costajohnt/prlore/issues/20)) ([2726eee](https://github.com/costajohnt/prlore/commit/2726eeeb98152259c8c594ab1ea2e6f06a3690b6))
+
 ## [0.5.1](https://github.com/costajohnt/prlore/compare/v0.5.0...v0.5.1) (2026-10-29)
 
 
