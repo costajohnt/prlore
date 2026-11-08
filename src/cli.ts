@@ -307,7 +307,10 @@ export async function runMineCli(argv: string[], deps: CliDeps): Promise<number>
   // A reconcile fallback means no probe ran and every rule is "unobservable": the preview
   // above is for inspection only, and the run is a failure rather than a doc to ship.
   if (status.warnings?.some((w) => w.startsWith("reconcile fallback:"))) {
-    deps.stderr.write("prlore: reconcile model call failed, every rule is unobservable; not written\n");
+    deps.stderr.write(
+      "prlore: reconcile model call failed, rules in a failed batch are unobservable; not written. " +
+        "Re-running mine resumes: finished model calls are saved in .prlore/synthesis-cache\n",
+    );
     return 1;
   }
 

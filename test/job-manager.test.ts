@@ -269,8 +269,9 @@ test("cancel requested during analyze takes effect at the next stage boundary: c
 // The provider mirrors AnthropicProvider: one monotonic counter across all call kinds.
 // Cap 15, cost 1/call, 14 PRs: analyze spends 1; extraction runs against the RESERVED
 // cap of 15 * 0.8 = 12, so exactly 11 PR extractions succeed (spent 1 -> 12) and 3 get
-// budget-skipped; synthesis then still has 12 < 15 headroom for its reconcile (-> 13),
-// dedup (-> 14, v0.3 Task 3), and plan (-> 15) calls. Without the reservation,
+// budget-skipped; synthesis then still has 12 < 15 headroom for its plan call (-> 13;
+// reconcile and dedup make no call when there are no clusters or rules to batch).
+// Without the reservation,
 // extraction would burn to the full cap and synthesis's first call's pre-call gate
 // would throw -> failed. This test pins the reservation.
 
@@ -290,7 +291,7 @@ test("shared monotonic budget: extraction trips its reduced cap, synthesis compl
   expect(status.warnings?.some((w) => w.startsWith("extraction budget-partial"))).toBe(true);
   expect(status.counters?.skippedBudget).toBe(3);
   expect(status.counters?.extracted).toBe(11);
-  expect(status.tokensSpentUsd).toBe(15); // analyze 1 + extract 11 + reconcile 1 + dedup 1 + plan 1
+  expect(status.tokensSpentUsd).toBe(13); // analyze 1 + extract 11 + plan 1
   expect(manager.result(jobId)).not.toBeNull();
 });
 
