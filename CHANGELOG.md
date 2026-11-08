@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.2](https://github.com/costajohnt/prlore/compare/v0.6.1...v0.6.2) (2026-11-08)
+
+
+### Bug Fixes
+
+* order extracted candidates by PR so rule ids don't depend on completion order ([#27](https://github.com/costajohnt/prlore/issues/27)) ([53ed557](https://github.com/costajohnt/prlore/commit/53ed5573a465f02725dc112265cc56bd345c3c27))
+
 ## [0.6.1](https://github.com/costajohnt/prlore/compare/v0.6.0...v0.6.1) (2026-11-08)
 
 
