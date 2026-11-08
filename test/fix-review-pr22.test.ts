@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import commonmark from "commonmark";
+import * as commonmark from "commonmark";
 import MarkdownIt from "markdown-it";
 import { expect, test } from "vitest";
 import { emitDraft } from "../src/emitter/emit.js";

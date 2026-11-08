@@ -60,13 +60,17 @@ export function isMarkerIssue(result: MarkerPositions | MarkerIssue): result is 
 // "<!-- prlore:end -->" in the text.
 // Terminal control sequences (ESC/BEL/OSC hyperlinks, clipboard writes) and
 // bidi overrides have no place in a convention; drop them from anything printed
-// or written. Tab and newline are whitespace and handled by callers.
+// or written. Every whitespace run (CR, LF, U+2028/2029, ...) collapses to one
+// space so the text can't start a new line in a terminal or a markdown block.
 export function stripControls(s: string): string {
-  return s.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, "");
+  return s
+    .replace(/[\u0000-\u0008\u000e-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export function sanitize(s: string): string {
-  return escapeMarkdown(stripControls(s).replace(/\s+/g, " ").trim());
+  return escapeMarkdown(stripControls(s));
 }
 
 // Rule text is model output derived from untrusted PR text (audit 2026-11-07

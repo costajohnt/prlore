@@ -744,3 +744,15 @@ test("contested lines on stderr have terminal control and bidi characters stripp
   expect(err()).toContain("contested: a]8;;https://example.invalidbc — r[31m");
   expect(err()).not.toMatch(/[\u001b\u0007\u202e]/);
 });
+
+test("contested lines on stderr can't fake or overwrite terminal lines with CR/LF or Unicode line separators", async () => {
+  const repoPath = await tmpRepo();
+  const item = mkContested({ id: "z", statement: "real\rFAKE\nprlore: wrote: x\u2028y\u2029z\u0085w", reason: "r\r\n" });
+  const manager = new ScriptedJobManager([readyStatus()], { draft: mkDraft([item]), provenance: mkProvenance([mkRule()], [item]), contested: [item] });
+  const { stdout, stderr, err } = streams();
+  await runMineCli(baseArgv("octo/repo", repoPath, ["--dry-run"]), { makeDeps, manager, stdout, stderr, confirm: async () => false, pollIntervalMs: 0 });
+  const line = err().split("\n").find((l) => l.startsWith("contested:"))!;
+  expect(line).toContain("contested: real FAKE prlore: wrote: x y zw — r (left out");
+  expect(err()).not.toMatch(/[\r\u2028\u2029\u0085]/);
+  expect(err().split("\n").filter((l) => l.startsWith("prlore: wrote"))).toEqual([]);
+});
