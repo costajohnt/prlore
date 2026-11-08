@@ -29,6 +29,7 @@
   "devDependencies": {
     "@types/linkify-it": "5.0.0",
     "@types/node": "^26.1.0",
+    "commonmark": "0.31.2",
     "markdown-it": "14.1.0",
     "msw": "^2.14.6",
     "typescript": "^6.0.3",

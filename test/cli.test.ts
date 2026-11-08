@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { sanitize } from "../src/emitter/markers.js";
 import type { GqlTransport } from "../src/github/client.js";
 import type { JobDeps, JobManagerApi, JobResult } from "../src/jobs/manager.js";
 import type { JobStatus } from "../src/jobs/registry.js";
@@ -661,8 +662,8 @@ test("contested items are listed to stderr and stripped from the written file us
   // finalizeDraft render.ts's guard makes safe, not a reimplementation).
   const written = await readFile(join(repoPath, ".prlore", "AGENTS.md"), "utf8");
   expect(written).not.toContain("Needs your call (contested)");
-  expect(written).not.toContain("Use tabs, not spaces");
-  expect(written).not.toContain("Mentions ## Needs your call");
+  expect(written).not.toContain(sanitize("Use tabs, not spaces"));
+  expect(written).not.toContain(sanitize("Mentions ## Needs your call"));
   expect(written).toContain("Always write tests first");
 });
 

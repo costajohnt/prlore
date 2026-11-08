@@ -293,14 +293,14 @@ test("resolveContested: kept items are appended as resolved, dropped/unresolved 
   });
   expect(writeRes.isError).toBeFalsy();
   // Kept low-confidence items are echoed back so the user sees them.
-  expect(JSON.parse(textOf(writeRes)).keptLowConfidence).toEqual([{ id: "low-1", statement: "Name files in kebab-case" }]);
+  expect(JSON.parse(textOf(writeRes)).keptLowConfidence).toEqual([{ id: "low-1", statement: sanitize("Name files in kebab-case") }]);
 
   const written = await readFile(join(repoPath, ".prlore", "AGENTS.md"), "utf8");
   expect(written).toContain("Prefer tabs");
   expect(written).toContain("_(resolved)_");
-  expect(written).toContain("- **[low confidence] Name files in kebab-case** _(resolved)_");
+  expect(written).toContain(`- **[low confidence] ${sanitize("Name files in kebab-case")}** _(resolved)_`);
   expect(written).not.toContain("Prefer spaces");
-  expect(written).not.toContain("Prefer four-space indents");
+  expect(written).not.toContain(sanitize("Prefer four-space indents"));
   expect(written).not.toContain("Needs your call (contested)");
 });
 
@@ -525,7 +525,7 @@ test("a rule statement containing the literal contested-header text does not tru
   expect(written).toContain(poisonRule.statement);
   expect(written).toContain(laterRule.statement);
   // The real (unresolved) contested item is still stripped as usual.
-  expect(written).not.toContain("Use tabs, not spaces");
+  expect(written).not.toContain(sanitize("Use tabs, not spaces"));
   // Only the poison rule's embedded occurrence remains; the genuine heading is gone.
   const headerOccurrences = written.split("## Needs your call (contested)").length - 1;
   expect(headerOccurrences).toBe(1);
@@ -590,8 +590,8 @@ test("a contested item's statement embedding the literal header text does not de
 
   const written = await readFile(join(repoPath, ".prlore", "AGENTS.md"), "utf8");
   expect(written).not.toContain("Needs your call (contested)");
-  expect(written).not.toContain("Use tabs, not spaces");
-  expect(written).not.toContain("Mentions ## Needs your call");
+  expect(written).not.toContain(sanitize("Use tabs, not spaces"));
+  expect(written).not.toContain(sanitize("Mentions ## Needs your call"));
   expect(written).toContain("Always write tests first");
 });
 
