@@ -1,3 +1,4 @@
+import LinkifyIt from "linkify-it";
 // Single source of truth for the ADR 004 managed-block markers and the
 // untrusted-text sanitizer, both of which used to be copy-pasted across
 // src/reconciler/render.ts, src/emitter/emit.ts, and src/server-tools.ts (the
@@ -87,60 +88,50 @@ const CODE_SPAN = /(?<![`\\])(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g;
 //     in one field could pair with one in the next field rendered on the same
 //     line, and the renderer would see different span boundaries than this
 //     per-field split (letting HTML through in the other field).
-//   - URLs ("scheme://...", protocol-relative "//...", "www....", "mailto:...")
-//     and bare domain-like tokens ("example.com/x.sh", "README.md": markdown-it's
-//     fuzzy linkify links those too) are wrapped in a code span: linkifiers (GFM, markdown-it linkify) never look inside code, and
-//     the URL stays readable. A bracket defang like "https[:]//host" is not
-//     enough: markdown-it still links the "//host" part.
+//   - Anything a linkifier would turn into a link is defanged in place:
+//     linkify-it (the matcher markdown-it's linkify uses) finds URLs, bare and
+//     Unicode/punycode domains, emails and IPs; each match gets "." -> "[.]"
+//     and "://" -> "[://]", which no linkifier matches and a reader still
+//     understands. No code spans are added, so backtick runs never change.
+//     A regex pass then defangs any leftover "scheme://", "//host", "www."
+//     or "mailto:" linkify-it didn't report.
 // Where this splitter and a renderer could disagree (odd backtick nesting),
 // the splitter errs toward treating text as NOT code, i.e. over-escaping.
 // Finally, a field may be rendered at the start of a line or list item, so a
 // leading block marker (heading, quote, list, setext/thematic break, table,
 // fence) is backslash-escaped.
-const URL_LIKE =
-  /(?:\b[a-z][a-z0-9+.-]*:)?\/\/\S*|\bwww\.\S*|\bmailto:\S*|\b[\w-]+(?:\.[\w-]+)*\.[a-z]{2,}\b(?:\/\S*)?/gi;
+const linkify = new LinkifyIt(undefined, { fuzzyLink: true, fuzzyEmail: true, fuzzyIP: true });
 
 const escapeText = (t: string): string =>
-  t.replaceAll("](", "] (").replaceAll("[", "&#91;").replaceAll("<", "&lt;").replaceAll("`", "&#96;");
+  t.replaceAll("[", "&#91;").replaceAll("<", "&lt;").replaceAll("`", "&#96;");
+
+const defang = (t: string): string =>
+  t
+    .replaceAll("://", "[://]")
+    .replace(/(?<!:)\/\/(?=\S)/g, "/[/]")
+    .replace(/\bwww\./gi, "www[.]")
+    .replace(/\bmailto:/gi, "mailto[:]");
+
+function neutralizeText(raw: string): string {
+  const t = raw.replaceAll("](", "] (");
+  let out = "";
+  let last = 0;
+  for (const m of linkify.match(t) ?? []) {
+    out += defang(escapeText(t.slice(last, m.index)));
+    out += defang(escapeText(t.slice(m.index, m.lastIndex)).replaceAll(".", "[.]"));
+    last = m.lastIndex;
+  }
+  // Re-split in case a defang bracket landed right before "(".
+  return (out + defang(escapeText(t.slice(last)))).replaceAll("](", "] (");
+}
 
 function neutralizeLinksAndHtml(s: string): string {
-  // Build the field as parts, recording every code span we intend the
-  // renderer to see: the input's own balanced spans plus our URL wrappers.
-  const parts: string[] = [];
-  const spans: string[] = [];
-  const pushSpan = (span: string) => {
-    // Two spans touching ("`a``url`") would merge into one longer backtick
-    // run and change every boundary after it; keep them apart with a space.
-    // Escaped text never contains a backtick, so this is the only adjacency.
-    if (parts.at(-1)?.endsWith("`")) parts.push(" ");
-    parts.push(span);
-    spans.push(span);
-  };
-  const pushText = (t: string) => {
-    const escaped = escapeText(t);
-    let last = 0;
-    for (const m of escaped.matchAll(URL_LIKE)) {
-      if (m.index > last) parts.push(escaped.slice(last, m.index));
-      pushSpan(`\`${m[0]}\``);
-      last = m.index + m[0].length;
-    }
-    if (escaped.length > last) parts.push(escaped.slice(last));
-  };
+  let out = "";
   let last = 0;
   for (const m of s.matchAll(CODE_SPAN)) {
-    pushText(s.slice(last, m.index));
-    pushSpan(m[0]);
+    out += neutralizeText(s.slice(last, m.index)) + m[0];
     last = m.index + m[0].length;
   }
-  pushText(s.slice(last));
-  let out = parts.join("");
-
-  // Self-check: re-parse the result and require exactly the spans we built.
-  // If anything differs, fall back to no code spans at all: every backtick
-  // escaped, and URL dots/slashes entity-encoded so no linkifier sees a host.
-  const reparsed = [...out.matchAll(CODE_SPAN)].map((m) => m[0]);
-  if (reparsed.length !== spans.length || reparsed.some((sp, i) => sp !== spans[i])) {
-    out = escapeText(s).replace(URL_LIKE, (url) => url.replaceAll(".", "&#46;").replaceAll("/", "&#47;"));
-  }
+  out += neutralizeText(s.slice(last));
   return out.replace(/^[#>+\-*=|_~]/, "\\$&").replace(/^(\d{1,9})([.)])/, "$1\\$2");
 }

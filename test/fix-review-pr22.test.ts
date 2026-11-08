@@ -55,11 +55,12 @@ test("no payload renders a link, image, heading, quote, or list when placed as t
   }
 });
 
-test("a defanged URL is not re-linkified by markdown-it and stays readable", () => {
-  const out = sanitize("run HTTPS://example.invalid/x.sh or see www.example.com, example.com/x.sh, README.md, e.g. this");
-  expect(out).toContain("e.g. this"); // short abbreviations are left alone
+test("defanged URLs, domains, emails and IPs stay readable and are not linkified", () => {
+  const out = sanitize("run HTTPS://example.invalid/x.sh or see www.example.com, example.com/x.sh, e.g. this");
   expect(md.renderInline(out)).not.toContain("<a ");
-  expect(out).toContain("`HTTPS://example.invalid/x.sh`");
+  expect(out).toContain("HTTPS[://]example");
+  expect(out).toContain("example[.]com/x[.]sh");
+  expect(out).toContain("e.g. this"); // short abbreviations are left alone
 });
 
 test("an overview equal to the contested heading doesn't truncate the written doc", () => {
@@ -113,18 +114,36 @@ test("an existing .prlore/.gitignore is never overwritten", async () => {
   expect(result.pathsWritten).not.toContain(join(repo, ".prlore", ".gitignore"));
 });
 
-test("a URL right next to an existing code span (same field or adjacent field) can't merge backtick runs", () => {
-  for (const field of ["`a`https://example.invalid/x", "https://example.invalid/x`a`", "`a`https://example.invalid`b`"]) {
-    const out = sanitize(field);
-    const html = md.renderInline(out);
+test("a URL right next to an existing code span (same field or adjacent field) leaves code spans intact and unlinked", () => {
+  for (const field of ["`a`https://example.com/x", "https://example.com/x`a`", "`a`https://example.com`b`"]) {
+    const html = md.renderInline(sanitize(field));
     expect(html, field).not.toContain("<a ");
     expect(html, field).toContain("<code>a</code>");
-    expect(html, field).toMatch(/<code>https:\/\/example\.invalid(\/x)?<\/code>/);
   }
-  // Adjacent fields on one rendered line: "**A** — B".
-  const line = `- **${sanitize("see https://example.invalid")}** — ${sanitize("`b` then <img src=x>")}`;
+  const line = `- **${sanitize("see https://example.com")}** — ${sanitize("`b` then <img src=x>")}`;
   const html = md.render(line);
   expect(html).not.toMatch(/<a |<img/);
-  expect(html).toContain("<code>https://example.invalid</code>");
   expect(html).toContain("<code>b</code>");
+});
+
+// Every renderer-linkable shape linkify-it knows, plus the earlier payloads:
+// markdown-it with linkify on must produce zero links or images for all of it.
+const LINK_CORPUS = [
+  "https://example.com/x.sh", "//example.com/x", "www.example.com", "example.com", "evil.io/x.sh",
+  "пример.рф", "例子.测试", "xn--e1afmkfd.xn--p1ai", "münchen.de/x",
+  "a@example.com", "mailto:a@example.com", "1.2.3.4", "http://1.2.3.4:8080/x", "http://localhost:3000",
+  "ftp://example.com", "example.com.(x)", "README.md", "[x](https://example.com)", "![i](//example.com/p.png)",
+  "<https://example.com>", "<img src=//example.com/p.png>", "[r]: //example.com", "see [docs][r]",
+  "`a`https://example.com`b`", "\\`https://example.com\\`",
+];
+
+test("markdown-it (linkify on) renders zero <a>/<img> for the whole sanitized corpus, in every rendered position", () => {
+  const all = [...LINK_CORPUS, ...PAYLOADS];
+  for (const p of all) {
+    const plan = { title: p, overview: p, perArea: false, sections: [{ heading: p, ruleIds: ["1"] }] };
+    const r = { ...rule("1", p), rationale: p };
+    const doc = renderDraft(plan, [r], [{ id: "c", statement: p, reason: p, sides: [] }], config, [rule("2", p)]);
+    const html = md.render(doc) + md.render(finalizeDraft(doc, [{ statement: p, lowConfidence: true }]));
+    expect(html, p).not.toMatch(/<a |<img/);
+  }
 });
