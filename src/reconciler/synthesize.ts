@@ -8,6 +8,7 @@ import type { PatternsModel } from "../schemas/patterns-model.js";
 import {
   ProvenanceSchema,
   type ContestedItem,
+  type CorpusInfo,
   type EvidenceRecord,
   type Provenance,
   type RuleRecord,
@@ -29,6 +30,7 @@ export interface SynthesizeDeps {
   now?: () => number; // default Date.now
   stateDir?: string; // when given: atomic writes + guarded stage flip
   excludes?: string[]; // threaded into reconcile probes
+  corpus?: CorpusInfo; // recorded in provenance as the corpus freshness line
 }
 
 function toRuleRecord(rule: ReconciledRule, nowMs: number): RuleRecord {
@@ -246,6 +248,7 @@ export async function synthesize(
   const provenance = ProvenanceSchema.parse({
     generatedAt: new Date(now()).toISOString(),
     intent: config.intent,
+    ...(deps.corpus ? { corpus: deps.corpus } : {}),
     rules: finalTiered,
     dropped,
     contested,

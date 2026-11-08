@@ -1,6 +1,11 @@
 {
   "generatedAt": "2026-07-01T00:00:00.000Z",
   "intent": "help a new contributor learn our conventions",
+  "corpus": {
+    "prs": 3,
+    "newestUpdatedAt": "2026-06-25T00:00:00Z",
+    "addedThisRun": 3
+  },
   "rules": [
     {
       "id": "1",

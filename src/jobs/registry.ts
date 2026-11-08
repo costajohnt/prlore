@@ -1,4 +1,5 @@
 import type { Stage } from "../schemas/checkpoint.js";
+import type { CorpusInfo } from "../schemas/provenance.js";
 
 // spec §8 shape. Replaces the Phase 1 stub union: every field beyond `state` is
 // optional so `{ state: "idle" }` (the Phase 1 contract server.test.ts pins) stays
@@ -10,5 +11,6 @@ export interface JobStatus {
   counters?: Record<string, number>;
   warnings?: string[];
   tokensSpentUsd?: number;
+  corpus?: CorpusInfo;
   error?: string;
 }
