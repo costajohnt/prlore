@@ -33,7 +33,8 @@ export const MineConfigSchema = z.object({
         .refine((t) => t !== "." && t !== ".." && !/[\\/]/.test(t) && !/^[A-Za-z]:/.test(t), {
           message: "target must be a plain filename (no path separators, '.', or '..')",
         })
-        .default("AGENTS.md"),
+        .default("AGENTS.md")
+        .describe("File name at the repo root that gets a short pointer block; the mined doc itself always goes to .prlore/<target>"),
       layout: z.enum(["single", "per-area", "auto"]).default("auto"),
       citations: z.enum(["inline-light", "sidecar-only"]).default("inline-light"),
       // v0.3 Task 4: the top maxRules (by score, which is already the sort order

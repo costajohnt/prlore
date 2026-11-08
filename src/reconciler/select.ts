@@ -2,6 +2,7 @@ import { z } from "zod";
 import { BudgetExceededError, type ModelProvider } from "../model/provider.js";
 import type { PatternsModel } from "../schemas/patterns-model.js";
 import type { RuleRecord } from "../schemas/provenance.js";
+import { UNTRUSTED_DATA_RULE, untrustedFence } from "../util/untrusted.js";
 
 export const DocPlanSchema = z.object({
   title: z.string().min(1),
@@ -17,7 +18,9 @@ given the intent the document must serve, the repo's areas, and a list of corrob
 Choose a title and an overview paragraph whose voice fits the intent. Group the rules into 3-7
 sections ordered by usefulness to the intent, listing each section's ruleIds in the order they
 should appear. Set perArea to true only if the areas' stacks or concerns genuinely diverge enough
-to warrant per-area sections; otherwise false. Respond with ONLY JSON matching the schema.`;
+to warrant per-area sections; otherwise false. Respond with ONLY JSON matching the schema.
+
+${UNTRUSTED_DATA_RULE}`;
 
 const OTHER_CONVENTIONS_HEADING = "Other conventions";
 const RESCUE_THRESHOLD = 0.5;
@@ -28,7 +31,7 @@ const SECTION_OVERHEAD_LINES = 3;
 function buildPrompt(rules: RuleRecord[], intent: string, areas: PatternsModel["areas"]): string {
   const areaLines = areas.map((a) => `${a.path} (${a.stack.join("/")}, ${a.recencyScore})`);
   const ruleLines = rules.map((r) => `[${r.id}] ${r.statement} (${r.score}, ${r.verdict}, ${r.category})`);
-  return [`intent: ${intent}`, "", "areas:", ...areaLines, "", "rules:", ...ruleLines].join("\n");
+  return [`intent: ${intent}`, "", "areas:", ...areaLines, "", "rules:", untrustedFence()(ruleLines.join("\n"))].join("\n");
 }
 
 function dropUnknownAndDuplicates(sections: DocPlanSection[], knownIds: Set<string>): { sections: DocPlanSection[]; seen: Set<string> } {

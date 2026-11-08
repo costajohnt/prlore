@@ -9,6 +9,14 @@ const BEGIN = "<!-- prlore:begin -->";
 const END = "<!-- prlore:end -->";
 
 const tmpRepo = () => mkdtemp(join(tmpdir(), "prlore-emit-"));
+const POINTER_LINK = "[.prlore/AGENTS.md](.prlore/AGENTS.md)";
+const POINTER_HEADING = "## Mined PR-review conventions";
+const POINTER_BLOCK =
+  `${BEGIN}\n${POINTER_HEADING}\n` +
+  `Conventions mined from past PR reviews by prlore: ${POINTER_LINK}. ` +
+  `Treat them as suggestions; the code and maintainers win where they disagree.\n${END}\n`;
+const minedPath = (repoPath: string) => join(repoPath, ".prlore", "AGENTS.md");
+const areaPath = (repoPath: string, area: string) => join(repoPath, ".prlore", "areas", `${area}.md`);
 
 function mkRule(overrides: Partial<RuleRecord> = {}): RuleRecord {
   return {
@@ -38,7 +46,7 @@ function mkProvenance(rules: RuleRecord[] = [mkRule()]): Provenance {
 
 // ---- fresh write -------------------------------------------------------
 
-test("fresh file: target absent gets the draft wrapped in managed markers", async () => {
+test("fresh repo: AGENTS.md gets only the softened pointer block; the mined doc goes to .prlore/AGENTS.md", async () => {
   const repoPath = await tmpRepo();
   const provenance = mkProvenance();
   const result = await emitDraft("# Conventions\n\nWrite tests.\n", provenance, {
@@ -47,14 +55,16 @@ test("fresh file: target absent gets the draft wrapped in managed markers", asyn
     layout: "single",
   });
 
-  const written = await readFile(join(repoPath, "AGENTS.md"), "utf8");
-  expect(written).toBe(`${BEGIN}\n# Conventions\n\nWrite tests.\n${END}\n`);
-  expect(result.pathsWritten).toContain(join(repoPath, "AGENTS.md"));
+  expect(await readFile(join(repoPath, "AGENTS.md"), "utf8")).toBe(POINTER_BLOCK);
+  expect(await readFile(minedPath(repoPath), "utf8")).toBe(`${BEGIN}\n# Conventions\n\nWrite tests.\n${END}\n`);
+  expect(result.pathsWritten).toEqual(
+    expect.arrayContaining([join(repoPath, "AGENTS.md"), minedPath(repoPath)]),
+  );
 });
 
 // ---- managed-block replacement -----------------------------------------
 
-test("managed-block replacement leaves surrounding human prose byte-identical", async () => {
+test("upgrade: a full doc an older prlore wrote into AGENTS.md's managed block moves to .prlore/ and becomes the pointer; prose outside the markers byte-identical", async () => {
   const repoPath = await tmpRepo();
   const above = "# My Project\n\nSome human-written intro that must survive untouched.\n\n";
   const below = "\n## Human section below\n\nMore hand-written prose, untouched.\n";
@@ -65,12 +75,10 @@ test("managed-block replacement leaves surrounding human prose byte-identical", 
   await emitDraft("new draft content\n", provenance, { repoPath, target: "AGENTS.md", layout: "single" });
 
   const written = await readFile(join(repoPath, "AGENTS.md"), "utf8");
-  const beginIdx = written.indexOf(BEGIN);
-  const endIdx = written.indexOf(END);
-  expect(written.slice(0, beginIdx)).toBe(above);
-  expect(written.slice(endIdx + END.length)).toBe(below);
-  expect(written).toContain("new draft content");
+  expect(written).toBe(`${above}${POINTER_BLOCK.replace(/\n$/, "")}${below}`);
   expect(written).not.toContain("old draft content");
+  expect(written).not.toContain("new draft content");
+  expect(await readFile(minedPath(repoPath), "utf8")).toBe(`${BEGIN}\nnew draft content\n${END}\n`);
 });
 
 // ---- refusal cases -------------------------------------------------------
@@ -129,7 +137,7 @@ test("sidecar is always written to <repoPath>/.prlore/provenance.json and is sch
 
 // ---- per-area mode ---------------------------------------------------------
 
-test("per-area layout: root gets links + full draft, area files get filtered stubs, non-existent dirs skipped", async () => {
+test("per-area layout (fresh repo): .prlore/AGENTS.md gets links + full draft, .prlore/areas/ get filtered stubs, non-existent dirs skipped", async () => {
   const repoPath = await tmpRepo();
   await mkdir(join(repoPath, "auth"), { recursive: true });
   await mkdir(join(repoPath, "webapp"), { recursive: true });
@@ -143,29 +151,32 @@ test("per-area layout: root gets links + full draft, area files get filtered stu
   const draft = "# Conventions\n\nFull draft body with everything.\n";
   const result = await emitDraft(draft, provenance, { repoPath, target: "AGENTS.md", layout: "per-area" });
 
-  const root = await readFile(join(repoPath, "AGENTS.md"), "utf8");
+  expect(await readFile(join(repoPath, "AGENTS.md"), "utf8")).toBe(POINTER_BLOCK);
+  const root = await readFile(minedPath(repoPath), "utf8");
   expect(root).toContain("Full draft body with everything.");
-  expect(root).toContain("auth/AGENTS.md");
-  expect(root).toContain("webapp/AGENTS.md");
-  expect(root).not.toContain("ghost/AGENTS.md");
+  expect(root).toContain("areas/auth.md");
+  expect(root).toContain("areas/webapp.md");
+  expect(root).not.toContain("ghost");
 
-  const authStub = await readFile(join(repoPath, "auth", "AGENTS.md"), "utf8");
+  const authStub = await readFile(areaPath(repoPath, "auth"), "utf8");
   expect(authStub).toContain("# Conventions for auth");
   expect(authStub).toContain("Hash passwords with bcrypt");
   expect(authStub).not.toContain("Use functional components");
 
-  const webappStub = await readFile(join(repoPath, "webapp", "AGENTS.md"), "utf8");
+  const webappStub = await readFile(areaPath(repoPath, "webapp"), "utf8");
   expect(webappStub).toContain("# Conventions for webapp");
   expect(webappStub).toContain("Use functional components");
   expect(webappStub).not.toContain("Hash passwords with bcrypt");
 
-  await expect(stat(join(repoPath, "ghost", "AGENTS.md"))).rejects.toThrow();
+  await expect(stat(areaPath(repoPath, "ghost"))).rejects.toThrow();
+  await expect(stat(join(repoPath, "auth", "AGENTS.md"))).rejects.toThrow();
 
   expect(result.pathsWritten).toEqual(
     expect.arrayContaining([
       join(repoPath, "AGENTS.md"),
-      join(repoPath, "auth", "AGENTS.md"),
-      join(repoPath, "webapp", "AGENTS.md"),
+      minedPath(repoPath),
+      areaPath(repoPath, "auth"),
+      areaPath(repoPath, "webapp"),
       join(repoPath, ".prlore", "provenance.json"),
     ]),
   );
@@ -177,14 +188,15 @@ test("per-area layout: root gets links + full draft, area files get filtered stu
 test("per-area stub files are managed blocks too: existing stub with valid markers gets its region replaced only", async () => {
   const repoPath = await tmpRepo();
   await mkdir(join(repoPath, "auth"), { recursive: true });
+  await mkdir(join(repoPath, ".prlore", "areas"), { recursive: true });
   const above = "# hand-authored heading for auth\n\n";
-  await writeFile(join(repoPath, "auth", "AGENTS.md"), `${above}${BEGIN}\nold stub\n${END}\n`, "utf8");
+  await writeFile(areaPath(repoPath, "auth"), `${above}${BEGIN}\nold stub\n${END}\n`, "utf8");
 
   const authRule = mkRule({ id: "a1", statement: "Hash passwords with bcrypt", scope: ["auth/login.ts"] });
   const provenance = mkProvenance([authRule]);
   await emitDraft("# Conventions\n\nbody\n", provenance, { repoPath, target: "AGENTS.md", layout: "per-area" });
 
-  const authStub = await readFile(join(repoPath, "auth", "AGENTS.md"), "utf8");
+  const authStub = await readFile(areaPath(repoPath, "auth"), "utf8");
   expect(authStub.startsWith(above)).toBe(true);
   expect(authStub).toContain("Hash passwords with bcrypt");
   expect(authStub).not.toContain("old stub");
@@ -200,8 +212,8 @@ test("auto layout falls back to single when the draft is under the line threshol
 
   await emitDraft("short draft\n", provenance, { repoPath, target: "AGENTS.md", layout: "auto" });
 
-  await expect(stat(join(repoPath, "auth", "AGENTS.md"))).rejects.toThrow();
-  const root = await readFile(join(repoPath, "AGENTS.md"), "utf8");
+  await expect(stat(areaPath(repoPath, "auth"))).rejects.toThrow();
+  const root = await readFile(minedPath(repoPath), "utf8");
   expect(root).toContain("short draft");
 });
 
@@ -240,7 +252,7 @@ test("Fix (per-area escape): a scope segment of '.' does not clobber the root ta
     layout: "per-area",
   });
 
-  const root = await readFile(join(repoPath, "AGENTS.md"), "utf8");
+  const root = await readFile(minedPath(repoPath), "utf8");
   expect(root).toContain("Root body text that must survive.");
   // The unfixed code resolves "." to repoPath itself, so its area-stub write
   // (this exact body) overwrites the root managed content just written above.
@@ -255,7 +267,7 @@ test("Fix (per-area escape): a normal path segment still produces its area stub 
 
   await emitDraft("# Conventions\n\nbody\n", provenance, { repoPath, target: "AGENTS.md", layout: "per-area" });
 
-  const stub = await readFile(join(repoPath, "src", "AGENTS.md"), "utf8");
+  const stub = await readFile(areaPath(repoPath, "src"), "utf8");
   expect(stub).toContain("Normal area rule");
 });
 
@@ -268,7 +280,7 @@ test("auto layout switches to per-area when the draft exceeds 400 lines", async 
 
   await emitDraft(longDraft, provenance, { repoPath, target: "AGENTS.md", layout: "auto" });
 
-  const authStub = await readFile(join(repoPath, "auth", "AGENTS.md"), "utf8");
+  const authStub = await readFile(areaPath(repoPath, "auth"), "utf8");
   expect(authStub).toContain("Hash passwords with bcrypt");
 });
 
@@ -291,7 +303,7 @@ test("auto layout switches to per-area when the draft is under 400 lines but exc
 
   await emitDraft(longSingleLineDraft, provenance, { repoPath, target: "AGENTS.md", layout: "auto" });
 
-  const authStub = await readFile(join(repoPath, "auth", "AGENTS.md"), "utf8");
+  const authStub = await readFile(areaPath(repoPath, "auth"), "utf8");
   expect(authStub).toContain("Hash passwords with bcrypt");
 });
 
@@ -304,13 +316,10 @@ test("auto layout stays single when the draft is under BOTH the line and byte th
 
   await emitDraft(shortDraft, provenance, { repoPath, target: "AGENTS.md", layout: "auto" });
 
-  await expect(stat(join(repoPath, "auth", "AGENTS.md"))).rejects.toThrow();
+  await expect(stat(areaPath(repoPath, "auth"))).rejects.toThrow();
 });
 
 // ---- pointer mode: adaptive mode resolution (spec §Mode resolution) ---------
-
-const POINTER_LINK = "[.prlore/AGENTS.md](.prlore/AGENTS.md)";
-const POINTER_HEADING = "## Mined PR-review conventions";
 
 test("rule 4 — unmarked root file adopts pointer mode: full doc to .prlore/, pointer appended to root, prose byte-identical", async () => {
   const repoPath = await tmpRepo();
@@ -562,7 +571,7 @@ test("per-area layout skips an area directory that is a symlink out of the repo"
   await symlink(outside, join(repo, "lib"));
   const rules = [mkRule({ id: "1", scope: ["src/a.ts"] }), mkRule({ id: "2", scope: ["lib/b.ts"] })];
   const result = await emitDraft("# Conventions\n", mkProvenance(rules), { repoPath: repo, target: "AGENTS.md", layout: "per-area" });
-  expect(result.pathsWritten).toContain(join(repo, "src", "AGENTS.md"));
-  expect(result.pathsWritten).not.toContain(join(repo, "lib", "AGENTS.md"));
+  expect(result.pathsWritten).toContain(areaPath(repo, "src"));
+  expect(result.pathsWritten).not.toContain(areaPath(repo, "lib"));
   expect(await readdir(outside)).toEqual([]);
 });

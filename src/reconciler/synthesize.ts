@@ -20,7 +20,7 @@ import { mergeCodeOnlyPatterns, reconcileClusters, type ReconciledRule } from ".
 import { renderDraft } from "./render.js";
 import { authorityOf, failsRecurrenceFloor, INCLUDE_THRESHOLD, recurrenceOf, scoreRule } from "./score.js";
 import { planDoc } from "./select.js";
-import { verifyEvidence } from "./verify-evidence.js";
+import { isLowConfidence, LOW_CONFIDENCE_OVERLAP, verifyEvidence } from "./verify-evidence.js";
 
 export interface SynthesizeDeps {
   provider: ModelProvider;
@@ -118,6 +118,19 @@ function singleContestedItem(rule: ReconciledRule): ContestedItem {
   };
 }
 
+// A rule that cleared scoring but whose statement isn't lexically supported by
+// the quotes giving it authority. Not dropped: it goes to the contested list so
+// it stays out of the written file until a human keeps it.
+function lowConfidenceItem(rule: ReconciledRule): ContestedItem {
+  return {
+    id: String(rule.id),
+    statement: rule.statement,
+    reason: `low confidence: under ${LOW_CONFIDENCE_OVERLAP * 100}% of its words appear in the reviewer quote it cites; check the PRs before keeping it`,
+    sides: [contestedSide(rule)],
+    lowConfidence: true,
+  };
+}
+
 export async function synthesize(
   config: MineConfig,
   patterns: PatternsModel,
@@ -187,7 +200,9 @@ export async function synthesize(
       continue;
     }
     if (record.score < INCLUDE_THRESHOLD) dropped.push(record);
-    else rules.push(record);
+    else if (rule.syntheticScore === undefined && isLowConfidence(rule.statement, rule.evidence)) {
+      contested.push(lowConfidenceItem(rule));
+    } else rules.push(record);
   }
   rules.sort((a, b) => b.score - a.score);
 

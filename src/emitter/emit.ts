@@ -82,57 +82,29 @@ async function computeManagedContent(path: string, body: string): Promise<string
   return `${prefix}${coreBlock(body)}${suffix}`;
 }
 
-async function pathExists(path: string): Promise<boolean> {
-  try {
-    await stat(path);
-    return true;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw err;
-  }
-}
-
-type EmitMode = "direct" | "pointer";
-
-// Resolves the emission mode from durable filesystem state (spec §Mode
-// resolution), checked in this exact order so the pointer layout stays sticky:
-//   1. `.prlore/<target>` exists            → POINTER (repo already adopted it).
-//   2. root `<target>` absent               → DIRECT  (greenfield fresh-wrap).
-//   3. root `<target>` has a valid pair     → DIRECT  (in-place replace, ADR 004).
-//   4. root `<target>` has NEITHER marker   → POINTER (first adoption).
-// A root file with exactly one of BEGIN/END (a lone/stray marker) is a damaged
-// managed file, NOT a clean human doc — it falls through to refuse, same as a
-// corrupt pair. checkMarkers reports the same "missing pair" reason for zero
-// markers and a lone marker, so the neither-marker test below is explicit and
-// stricter than checkMarkers on its own (spec §Mode resolution).
-async function resolveMode(rootPath: string, prloreTargetPath: string): Promise<EmitMode> {
-  if (await pathExists(prloreTargetPath)) return "pointer"; // rule 1 (sticky)
-  const rootContent = await readIfExists(rootPath);
-  if (rootContent === null) return "direct"; // rule 2
-  const markers = checkMarkers(rootContent);
-  if (!isMarkerIssue(markers)) return "direct"; // rule 3: valid pair
-  if (!rootContent.includes(BEGIN) && !rootContent.includes(END)) return "pointer"; // rule 4
-  throw new EmitRefusedError(rootPath, markers.reason); // lone/corrupt marker → refuse
-}
-
-// The tiny managed block appended to (or replaced within) the human-authored
-// root `<target>` in pointer mode. `<target>` is interpolated into both the
-// link path and link text so a non-default --target stays self-consistent.
+// The tiny managed block appended to (or replaced within) the root
+// `<target>`. `<target>` is interpolated into both the link path and link text
+// so a non-default --target stays self-consistent. Worded as suggestions: the
+// mined doc is model output from third-party PR text, so it must not outrank
+// the code or the maintainers (audit 2026-11-07 H2).
 function pointerBlockBody(target: string): string {
   return (
     "## Mined PR-review conventions\n" +
-    `Conventions mined from this repo's PR history live in [.prlore/${target}](.prlore/${target}). ` +
-    "Read that file before working here."
+    `Conventions mined from past PR reviews by prlore: [.prlore/${target}](.prlore/${target}). ` +
+    "Treat them as suggestions; the code and maintainers win where they disagree."
   );
 }
 
-// Computes the next root `<target>` content for pointer mode without writing.
-//   - file absent                → fresh-wrap the pointer block.
+// Computes the next root `<target>` content without writing.
+//   - file absent                → a file holding just the pointer block.
 //   - file with NEITHER marker   → first adoption: append the pointer block after
 //                                  the existing content, separated by a blank
 //                                  line, human prose above kept byte-identical.
-//   - file with a valid pair     → replace the block in place (stickiness on
-//                                  re-run), prose outside it byte-identical.
+//   - file with a valid pair     → replace the block in place, prose outside it
+//                                  byte-identical. Covers re-runs and repos from
+//                                  before pointer mode was the only mode, whose
+//                                  block held the full mined doc: that content
+//                                  is superseded by the fresh `.prlore/<target>`.
 //   - file with a lone/corrupt   → refuse (findMarkers throws): prlore's own
 //                                  pointer file got damaged and we must not guess.
 async function computePointerRootContent(rootPath: string, pointerBody: string): Promise<string> {
@@ -258,26 +230,20 @@ function areaStubBody(area: string, target: string, rules: RuleRecord[]): string
 }
 
 /**
- * Writes the mined `draft` for `targetInfo.target`, choosing one of two modes
- * from durable filesystem state (spec §Mode resolution, resolveMode above):
- *
- * - DIRECT mode (today's behavior, unchanged): the full draft goes into the
- *   root `<target>` under a managed block (ADR 004: human prose outside the
- *   block is never touched); per-area layout writes `<area>/<target>` stubs.
- * - POINTER mode (unmarked human `<target>` exists, or the repo already
- *   adopted it): the full mined doc goes to `.prlore/<target>` and any per-area
- *   files to `.prlore/areas/<area>.md`; the root `<target>` receives only a
- *   tiny managed pointer block (appended on first adoption, replaced in place
- *   on re-run), so the human-authored prose is never rewritten.
+ * Writes the mined `draft` for `targetInfo.target`. The full mined doc always
+ * goes to `.prlore/<target>` (per-area files to `.prlore/areas/<area>.md`), and
+ * the root `<target>` only ever gets a small managed pointer block: created if
+ * the file is absent, appended to unmarked human prose, or replaced in place
+ * (which also migrates a root block that used to hold the full doc). Human
+ * prose outside the markers is never rewritten.
  *
  * The provenance sidecar (ADR 005) is always written at
  * `<repoPath>/.prlore/provenance.json`.
  *
- * All planned targets (root pointer/doc + `.prlore/<target>` + area files) are
- * read and validated BEFORE any write happens. If any would refuse (a
- * missing/lone/duplicated/reversed marker on a file prlore expects to own),
- * emitDraft throws EmitRefusedError and NOTHING is written — not the other
- * targets, not the sidecar — keeping every emission all-or-nothing.
+ * All planned targets are read and validated BEFORE any write happens. If any
+ * would refuse (a missing/lone/duplicated/reversed marker on a file prlore
+ * expects to own), emitDraft throws EmitRefusedError and NOTHING is written,
+ * not the other targets, not the sidecar.
  */
 export async function emitDraft(
   draft: string,
@@ -310,8 +276,6 @@ export async function emitDraft(
     }
   }
 
-  const mode = await resolveMode(rootPath, prloreTargetPath);
-
   // Second, independent gate (see isInsideRepo doc comment): drop — never
   // throw — any area whose resolved stub path would land outside repoPath. A
   // dropped area is excluded from BOTH the stub write and the root's "## Areas"
@@ -327,46 +291,30 @@ export async function emitDraft(
     return confined;
   };
 
-  // Build the plan of managed-block targets for the resolved mode. Each entry's
+  // Build the plan of managed-block targets. Each entry's
   // content is computed lazily (read-only) and only written after every target
   // validates — see the doc comment above.
   const planned: { path: string; content: Promise<string> }[] = [];
 
-  if (mode === "direct") {
-    if (effectiveLayout === "single") {
-      planned.push({ path: rootPath, content: computeManagedContent(rootPath, draft) });
-    } else {
-      const areas = await resolveAreas((area) => join(repoPath, area, target));
-      planned.push({
-        path: rootPath,
-        content: computeManagedContent(rootPath, withAreaLinks(draft, areas, (area) => `${area}/${target}`)),
-      });
-      for (const area of areas) {
-        const stubPath = join(repoPath, area, target);
-        planned.push({ path: stubPath, content: computeManagedContent(stubPath, areaStubBody(area, target, provenance.rules)) });
-      }
-    }
+  // Root `<target>` gets only the pointer block; the full mined doc and any
+  // per-area files live entirely under `.prlore/`.
+  planned.push({ path: rootPath, content: computePointerRootContent(rootPath, pointerBlockBody(target)) });
+  if (effectiveLayout === "single") {
+    planned.push({ path: prloreTargetPath, content: computeManagedContent(prloreTargetPath, draft) });
   } else {
-    // Pointer mode: root `<target>` gets only the pointer block; the full mined
-    // doc and any per-area files live entirely under `.prlore/`.
-    planned.push({ path: rootPath, content: computePointerRootContent(rootPath, pointerBlockBody(target)) });
-    if (effectiveLayout === "single") {
-      planned.push({ path: prloreTargetPath, content: computeManagedContent(prloreTargetPath, draft) });
-    } else {
-      const areaStubPath = (area: string) => join(repoPath, ".prlore", "areas", `${area}.md`);
-      const areas = await resolveAreas(areaStubPath);
-      // Root mined doc's "## Areas" links point at `areas/<area>.md` (relative
-      // to `.prlore/`); each stub's backlink is `../<target>` == `.prlore/<target>`.
+    const areaStubPath = (area: string) => join(repoPath, ".prlore", "areas", `${area}.md`);
+    const areas = await resolveAreas(areaStubPath);
+    // Root mined doc's "## Areas" links point at `areas/<area>.md` (relative
+    // to `.prlore/`); each stub's backlink is `../<target>` == `.prlore/<target>`.
+    planned.push({
+      path: prloreTargetPath,
+      content: computeManagedContent(prloreTargetPath, withAreaLinks(draft, areas, (area) => `areas/${area}.md`)),
+    });
+    for (const area of areas) {
       planned.push({
-        path: prloreTargetPath,
-        content: computeManagedContent(prloreTargetPath, withAreaLinks(draft, areas, (area) => `areas/${area}.md`)),
+        path: areaStubPath(area),
+        content: computeManagedContent(areaStubPath(area), areaStubBody(area, target, provenance.rules)),
       });
-      for (const area of areas) {
-        planned.push({
-          path: areaStubPath(area),
-          content: computeManagedContent(areaStubPath(area), areaStubBody(area, target, provenance.rules)),
-        });
-      }
     }
   }
 

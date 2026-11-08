@@ -66,5 +66,36 @@ export function sanitize(s: string): string {
     prev = out;
     out = out.replaceAll("<!--", "").replaceAll("-->", "");
   } while (out !== prev);
-  return out.trim();
+  return neutralizeLinksAndHtml(out.trim());
+}
+
+// A CommonMark code span: a maximal backtick run (not backslash-escaped) closed
+// by the next run of exactly the same length. Inside one, nothing renders as a
+// link or HTML, so it's left verbatim (keeps `Array<string>` readable).
+const CODE_SPAN = /(?<![`\\])(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g;
+
+// Rule text is model output derived from untrusted PR text (audit 2026-11-07
+// H2), and the written file is read by coding agents and humans. Outside code
+// spans, make sure it can't render a link, image, autolink, or raw HTML:
+//   - "](" is split so no inline link/image forms (reference links need a
+//     line-initial definition, which whitespace collapsing above rules out);
+//   - "<" is escaped, killing HTML tags and <scheme:...> autolinks;
+//   - "scheme://" and "www." are defanged so GFM bare-URL autolinks don't fire.
+// The text stays readable; the URL is still visible, just not clickable.
+// Where this splitter and a renderer could disagree (odd backtick nesting),
+// the splitter errs toward treating text as NOT code, i.e. over-escaping.
+function neutralizeLinksAndHtml(s: string): string {
+  const neutralize = (t: string): string =>
+    t
+      .replaceAll("](", "] (")
+      .replaceAll("<", "&lt;")
+      .replace(/\b([a-z][a-z0-9+.-]*):\/\//gi, "$1[:]//")
+      .replace(/\bwww\./gi, "www[.]");
+  let out = "";
+  let last = 0;
+  for (const m of s.matchAll(CODE_SPAN)) {
+    out += neutralize(s.slice(last, m.index)) + m[0];
+    last = m.index + m[0].length;
+  }
+  return out + neutralize(s.slice(last));
 }

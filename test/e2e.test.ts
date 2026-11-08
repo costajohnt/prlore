@@ -316,7 +316,7 @@ function normalizeProvenance(p: Record<string, unknown>): Record<string, unknown
 
 // ---- the test -----------------------------------------------------------------
 
-test("end-to-end: mine -> preview -> write produces a byte-identical managed-block write, a schema-valid provenance sidecar with the stale rule retained in dropped, and an unchanged checkpoint -- matching the committed golden", async () => {
+test("end-to-end: mine -> preview -> write moves an older root managed block to .prlore/AGENTS.md (byte-identical golden), leaves only a pointer in AGENTS.md, a schema-valid provenance sidecar with the stale rule retained in dropped, and an unchanged checkpoint -- matching the committed golden", async () => {
   const repoPath = await buildFixtureRepo();
   const stateDir = join(repoPath, ".prlore");
   const agentsPath = join(repoPath, "AGENTS.md");
@@ -369,12 +369,13 @@ test("end-to-end: mine -> preview -> write produces a byte-identical managed-blo
   expect(preview.contested).toEqual([]);
   expect(preview.targetExists).toBe(true);
   expect(preview.wouldRefuse).toBe(false);
+  expect(preview.writePlan).toBe("will write .prlore/AGENTS.md and replace prlore's managed block in AGENTS.md with a pointer block");
 
   const writeRes = await client.callTool({ name: "write", arguments: { confirmToken: preview.confirmToken } });
   expect(writeRes.isError).toBeFalsy();
   const writeOut = JSON.parse(textOf(writeRes));
   expect(writeOut.pathsWritten).toEqual(
-    expect.arrayContaining([agentsPath, join(repoPath, ".prlore", "provenance.json")]),
+    expect.arrayContaining([agentsPath, join(repoPath, ".prlore", "AGENTS.md"), join(repoPath, ".prlore", "provenance.json")]),
   );
 
   // ---- Assertion 1: human prose outside the managed block is byte-identical ----
@@ -385,10 +386,14 @@ test("end-to-end: mine -> preview -> write produces a byte-identical managed-blo
   expect(endIdx).toBeGreaterThan(beginIdx);
   expect(written.slice(0, beginIdx)).toBe(HUMAN_PROSE_BEFORE);
   expect(written.slice(endIdx + END.length)).toBe(HUMAN_PROSE_AFTER);
+  // The old managed block (placeholder from a prior direct-mode run) became the pointer.
+  expect(extractManagedRegion(written)).toContain("[.prlore/AGENTS.md](.prlore/AGENTS.md)");
+  expect(written).not.toContain("placeholder content from a prior run");
+  expect(written).not.toContain("Use newApi for all new modules");
 
   // ---- Assertion 2: managed region carries the corroborated rule and the
   // migration-in-progress marker; the stale rule is gone from the managed block ----
-  const managedRegion = extractManagedRegion(written);
+  const managedRegion = extractManagedRegion(await readFile(join(repoPath, ".prlore", "AGENTS.md"), "utf8"));
   expect(managedRegion).toContain("**Use newApi for all new modules**");
   expect(managedRegion).toContain("**[migration in progress]** Migrate away from oldApi toward newApi");
   expect(managedRegion).not.toContain("Always use oldApi for widgets");

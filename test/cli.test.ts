@@ -415,7 +415,7 @@ test("happy flow: polls to ready, prints preview, writes after confirm=true, exi
 
   // emitDraft was actually called (real, unmocked implementation) and wrote the file
   expect(emitDraft).toHaveBeenCalledTimes(1);
-  const written = await readFile(join(repoPath, "AGENTS.md"), "utf8");
+  const written = await readFile(join(repoPath, ".prlore", "AGENTS.md"), "utf8");
   expect(written).toContain("Always write tests first");
 
   // "wrote:" status line went to stderr, not stdout (stdout is draft-only for piping)
@@ -431,7 +431,7 @@ test("happy flow: polls to ready, prints preview, writes after confirm=true, exi
   expect(err()).toMatch(/fetching/);
 });
 
-test("direct-mode confirm prompt names the target file only (no root AGENTS.md → direct mode)", async () => {
+test("fresh-repo confirm prompt names .prlore/AGENTS.md and the pointer block (no direct mode)", async () => {
   const repoPath = await tmpRepo();
   const manager = new ScriptedJobManager([readyStatus()], { draft: mkDraft([]), provenance: mkProvenance([mkRule()]), contested: [] });
   const { stdout, stderr } = streams();
@@ -448,7 +448,8 @@ test("direct-mode confirm prompt names the target file only (no root AGENTS.md �
 
   expect(code).toBe(0);
   const question = confirm.mock.calls[0]![0];
-  expect(question).toBe("Write AGENTS.md?");
+  expect(question).toBe("Write .prlore/AGENTS.md and add a pointer block to AGENTS.md?");
+  expect(await readFile(join(repoPath, "AGENTS.md"), "utf8")).not.toContain("Always write tests first");
 });
 
 test("pointer-mode confirm prompt names .prlore/AGENTS.md and the appended pointer block", async () => {
@@ -553,7 +554,7 @@ test("--yes skips the confirm prompt and writes directly", async () => {
   expect(code).toBe(0);
   expect(confirm).not.toHaveBeenCalled();
   expect(emitDraft).toHaveBeenCalledTimes(1);
-  const written = await readFile(join(repoPath, "AGENTS.md"), "utf8");
+  const written = await readFile(join(repoPath, ".prlore", "AGENTS.md"), "utf8");
   expect(written).toContain("Always write tests first");
 });
 
@@ -658,7 +659,7 @@ test("contested items are listed to stderr and stripped from the written file us
   // Neither contested item, nor the header itself, survived into the written file —
   // this is the hardened, line-anchored strip (proves the CLI shares the exact
   // finalizeDraft render.ts's guard makes safe, not a reimplementation).
-  const written = await readFile(join(repoPath, "AGENTS.md"), "utf8");
+  const written = await readFile(join(repoPath, ".prlore", "AGENTS.md"), "utf8");
   expect(written).not.toContain("Needs your call (contested)");
   expect(written).not.toContain("Use tabs, not spaces");
   expect(written).not.toContain("Mentions ## Needs your call");
