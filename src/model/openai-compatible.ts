@@ -1,5 +1,5 @@
 import { extractJson } from "./anthropic.js";
-import { BudgetExceededError, type CompleteOptions, type ModelProvider } from "./provider.js";
+import { BudgetExceededError, OutputTruncatedError, type CompleteOptions, type ModelProvider } from "./provider.js";
 import { appendSchemaHint } from "./schema-hint.js";
 
 const BODY_EXCERPT_LEN = 300;
@@ -38,7 +38,7 @@ interface ChatUsage {
   completion_tokens?: number;
 }
 interface ChatResponse {
-  choices?: { message?: { content?: string } }[];
+  choices?: { message?: { content?: string }; finish_reason?: string | null }[];
   usage?: ChatUsage;
 }
 
@@ -76,6 +76,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
       ];
       const res = await this.post({ model: this.opts.model, max_tokens: maxTokens, messages });
       this.track(res.usage);
+      if (res.choices?.[0]?.finish_reason === "length") throw new OutputTruncatedError(maxTokens);
       const text = res.choices?.[0]?.message?.content ?? "";
       try {
         return schema.parse(JSON.parse(extractJson(text)));

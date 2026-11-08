@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { BudgetExceededError, type ModelProvider } from "../model/provider.js";
+import { BudgetExceededError, OutputTruncatedError, type ModelProvider } from "../model/provider.js";
+import { inBatches } from "./batch.js";
 import type { EvidenceRecord } from "../schemas/provenance.js";
 import type { ReconciledRule } from "./reconcile.js";
 import { UNTRUSTED_DATA_RULE, untrustedFence } from "../util/untrusted.js";
@@ -37,7 +38,12 @@ const DedupeDraftSchema = z.object({
     }),
   ),
 });
-type DedupeDraft = z.infer<typeof DedupeDraftSchema>;
+type MergeSet = z.infer<typeof DedupeDraftSchema>["mergeSets"][number];
+
+// Input is one short line per rule and output is only the merge sets, so one batch
+// covers typical runs; batching (and splitting on truncation) keeps huge ones working.
+// ponytail: duplicates that land in different batches are not merged.
+export const DEDUPE_BATCH = 300;
 
 const SYSTEM = `You review a flat list of engineering-convention rules, each shown as
 "[id] statement". Some rules from DIFFERENT categories may state the SAME underlying norm in
@@ -100,6 +106,7 @@ function compareIds(a: ReconciledRule["id"], b: ReconciledRule["id"]): number {
 export async function dedupeAcrossBuckets(
   rules: ReconciledRule[],
   provider: ModelProvider,
+  batchSize = DEDUPE_BATCH,
 ): Promise<DedupeResult> {
   const contestedIds = new Set(rules.filter((r) => r.verdict === "contested").map((r) => String(r.id)));
   // Synthetic code-only rules (mergeCodeOnlyPatterns, no PR evidence) are included:
@@ -107,24 +114,30 @@ export async function dedupeAcrossBuckets(
   // restate a norm a PR thread also asserted (disclosed in v03-t3-report.md).
   const nonContested = rules.filter((r) => r.verdict !== "contested");
 
-  let draft: DedupeDraft;
-  try {
-    draft = await provider.complete({
-      system: SYSTEM,
-      prompt: buildPrompt(nonContested),
-      schema: DedupeDraftSchema,
-      maxTokens: 4096,
-    });
-  } catch (err) {
-    if (err instanceof BudgetExceededError) throw err;
-    return { rules, merged: [], warning: "cross-bucket dedup pass failed; rules left unmerged" };
-  }
+  let failed = false;
+  const mergeSets = await inBatches(nonContested, batchSize, async (batch): Promise<MergeSet[]> => {
+    try {
+      const draft = await provider.complete({
+        system: SYSTEM,
+        prompt: buildPrompt(batch),
+        schema: DedupeDraftSchema,
+        maxTokens: 4096,
+      });
+      return draft.mergeSets ?? [];
+    } catch (err) {
+      if (err instanceof BudgetExceededError || err instanceof OutputTruncatedError) throw err;
+      failed = true;
+      return [];
+    }
+  });
+  const warning = failed ? "cross-bucket dedup pass failed; rules left unmerged" : undefined;
+  if (failed && mergeSets.length === 0) return { rules, merged: [], warning };
 
   const byId = new Map(rules.map((r) => [String(r.id), r]));
   const claimed = new Set<string>();
   const validSets: ReconciledRule[][] = [];
 
-  for (const set of draft.mergeSets ?? []) {
+  for (const set of mergeSets) {
     const idsStr = (set.ids ?? []).map(String);
     if (idsStr.length < 2) continue; // nothing to merge
 
@@ -146,7 +159,7 @@ export async function dedupeAcrossBuckets(
     validSets.push(uniqueIds.map((id) => byId.get(id)!));
   }
 
-  if (validSets.length === 0) return { rules, merged: [] };
+  if (validSets.length === 0) return { rules, merged: [], ...(warning ? { warning } : {}) };
 
   const merged: MergedGroup[] = [];
   const absorbedIds = new Set<string>();
@@ -186,5 +199,5 @@ export async function dedupeAcrossBuckets(
     .filter((r) => !absorbedIds.has(String(r.id)))
     .map((r) => mergedByKeptId.get(String(r.id)) ?? r);
 
-  return { rules: outRules, merged };
+  return { rules: outRules, merged, ...(warning ? { warning } : {}) };
 }

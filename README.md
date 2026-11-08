@@ -190,6 +190,18 @@ works cold.
   Once tripped during extraction, the run degrades to a partial-corpus draft
   with a warning; once tripped during synthesis (the highest-value calls), the
   job fails outright rather than emitting a truncated conventions doc.
+  Re-running `mine` after a failed synthesis resumes it: every finished
+  analyze/synthesis reply is saved in `.prlore/synthesis-cache/` (cleared after
+  a run with no model failures) and extraction is cached per PR, so only the
+  calls that failed are paid for again.
+- Synthesis runs in batches (clustering 60 statements per call, merged across
+  batches by clustering the batch results again; reconcile 40 clusters per
+  call; dedupe 300 rules per call). With the Anthropic and OpenAI-compatible
+  providers a reply cut off at the output-token cap is detected and its batch
+  is split in half and retried; if a single item still does not fit, the job
+  fails. `claude-cli` ignores the output cap and reports no stop reason, so a
+  cut-off reply there shows up as an ordinary model failure (fallback plus a
+  warning).
 
 `model.provider` selects which model backend runs the mining calls:
 

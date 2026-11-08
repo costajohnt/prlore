@@ -1,7 +1,8 @@
 import { z } from "zod";
 import type { GitRunner } from "../analyzer/git.js";
 import { trendFor } from "../analyzer/probes.js";
-import { BudgetExceededError, type ModelProvider } from "../model/provider.js";
+import { BudgetExceededError, OutputTruncatedError, type ModelProvider } from "../model/provider.js";
+import { inBatches } from "./batch.js";
 import type { PatternsModel } from "../schemas/patterns-model.js";
 import type { EvidenceRecord, Verdict } from "../schemas/provenance.js";
 import { MONTH_MS } from "../util/time.js";
@@ -39,8 +40,11 @@ const ReconciliationDraftSchema = z.object({
     }),
   ),
 });
-type ReconciliationDraft = z.infer<typeof ReconciliationDraftSchema>;
-type Proposal = ReconciliationDraft["proposals"][number];
+type Proposal = z.infer<typeof ReconciliationDraftSchema>["proposals"][number];
+
+// Proposals are independent per cluster, so reconcile runs in batches (audit 2026-11-07
+// deep H2: one call over every cluster overflowed the 4096-token output cap).
+export const RECONCILE_BATCH = 40;
 
 const SYSTEM = `You review a set of proposed engineering conventions ("clusters") against a
 summary of the repo's structural patterns model. For each cluster, propose a verdict: one of
@@ -104,28 +108,33 @@ export async function reconcileClusters(
     repoPath: string;
     now: () => number;
     excludes?: string[];
-    /** Receives one entry when the model call fails and every cluster degrades to unobservable. */
+    /** Receives one entry per failed batch; that batch's clusters degrade to unobservable. */
     warnings?: string[];
+    batchSize?: number;
   },
 ): Promise<ReconciledRule[]> {
   const { provider, git, repoPath, now, excludes, warnings } = deps;
 
-  let draft: ReconciliationDraft;
-  try {
-    draft = await provider.complete({
-      system: SYSTEM,
-      prompt: buildPrompt(clusters, patterns),
-      schema: ReconciliationDraftSchema,
-      maxTokens: 4096,
-    });
-  } catch (err) {
-    if (err instanceof BudgetExceededError) throw err;
-    warnings?.push(`reconcile fallback: ${err instanceof Error ? err.message : String(err)}`);
-    draft = { proposals: [] };
-  }
+  const proposals = await inBatches(clusters, deps.batchSize ?? RECONCILE_BATCH, async (batch) => {
+    try {
+      const draft = await provider.complete({
+        system: SYSTEM,
+        prompt: buildPrompt(batch, patterns),
+        schema: ReconciliationDraftSchema,
+        maxTokens: 4096,
+      });
+      // A proposal may only speak for a cluster this batch showed the model.
+      const ids = new Set(batch.map((c) => c.id));
+      return draft.proposals.filter((p) => ids.has(p.clusterId));
+    } catch (err) {
+      if (err instanceof BudgetExceededError || err instanceof OutputTruncatedError) throw err;
+      warnings?.push(`reconcile fallback: ${err instanceof Error ? err.message : String(err)}`);
+      return [];
+    }
+  });
 
   const proposalByCluster = new Map<number, Proposal>();
-  for (const p of draft.proposals) {
+  for (const p of proposals) {
     if (!proposalByCluster.has(p.clusterId)) proposalByCluster.set(p.clusterId, p);
   }
 
