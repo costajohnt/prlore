@@ -617,3 +617,15 @@ test("two concurrent write calls sharing one token: exactly one succeeds, the ot
   expect(failures).toHaveLength(1);
   expect(textOf(failures[0]!)).toMatch(/confirm token/i);
 });
+
+test("mine refuses a stateDir outside repoPath (audit 2026-11-07 H1)", async () => {
+  const repoPath = await tmpRepo();
+  const manager = new StubJobManager();
+  const client = await connectedClient(manager);
+  for (const stateDir of [await tmpRepo(), join(repoPath, "..", "x"), repoPath]) {
+    const res = await client.callTool({ name: "mine", arguments: { repo: "octo/repo", intent: "x", repoPath, stateDir } });
+    expect(res.isError).toBe(true);
+    expect(textOf(res)).toMatch(/stateDir/);
+  }
+  expect(manager.startCalls).toHaveLength(0);
+});
