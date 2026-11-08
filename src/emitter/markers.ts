@@ -112,17 +112,29 @@ const defang = (t: string): string =>
     .replace(/\bwww\./gi, "www[.]")
     .replace(/\bmailto:/gi, "mailto[:]");
 
+// Defang every linkify-it match (and the regex leftovers) until nothing
+// changes: a defang can create new context ("src=//host" -> "src=/[/]host"
+// makes "host" a fuzzy link), so one pass isn't enough. Anything linkify-it
+// still matches after that gets its separators entity-encoded, which splits
+// markdown-it's text tokens so no linkifier sees a host.
 function neutralizeText(raw: string): string {
-  const t = raw.replaceAll("](", "] (");
-  let out = "";
-  let last = 0;
-  for (const m of linkify.match(t) ?? []) {
-    out += defang(escapeText(t.slice(last, m.index)));
-    out += defang(escapeText(t.slice(m.index, m.lastIndex)).replaceAll(".", "[.]"));
-    last = m.lastIndex;
+  let t = escapeText(raw.replaceAll("](", "] ("));
+  for (;;) {
+    let next = "";
+    let last = 0;
+    for (const m of linkify.match(t) ?? []) {
+      next += t.slice(last, m.index) + t.slice(m.index, m.lastIndex).replaceAll(".", "[.]");
+      last = m.lastIndex;
+    }
+    next = defang(next + t.slice(last)).replaceAll("](", "] (");
+    if (next === t) break;
+    t = next;
   }
-  // Re-split in case a defang bracket landed right before "(".
-  return (out + defang(escapeText(t.slice(last)))).replaceAll("](", "] (");
+  for (const m of [...(linkify.match(t) ?? [])].reverse()) {
+    const encoded = t.slice(m.index, m.lastIndex).replace(/[.:/@]/g, (c) => `&#${c.charCodeAt(0)};`);
+    t = t.slice(0, m.index) + encoded + t.slice(m.lastIndex);
+  }
+  return t;
 }
 
 function neutralizeLinksAndHtml(s: string): string {
