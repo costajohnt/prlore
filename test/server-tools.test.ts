@@ -275,6 +275,9 @@ test("resolveContested: kept items are appended as resolved, dropped/unresolved 
 
   const preview = JSON.parse(textOf(await client.callTool({ name: "preview", arguments: {} })));
   expect(preview.markdown).toContain("Needs your call (contested)");
+  // Low-confidence gate is stated plainly to the host agent.
+  expect(preview.lowConfidenceNote).toMatch(/1 low-confidence item/);
+  expect(preview.lowConfidenceNote).toMatch(/explicitly asks/);
 
   const writeRes = await client.callTool({
     name: "write",
@@ -288,6 +291,8 @@ test("resolveContested: kept items are appended as resolved, dropped/unresolved 
     },
   });
   expect(writeRes.isError).toBeFalsy();
+  // Kept low-confidence items are echoed back so the user sees them.
+  expect(JSON.parse(textOf(writeRes)).keptLowConfidence).toEqual([{ id: "low-1", statement: "Name files in kebab-case" }]);
 
   const written = await readFile(join(repoPath, ".prlore", "AGENTS.md"), "utf8");
   expect(written).toContain("Prefer tabs");
@@ -631,4 +636,25 @@ test("mine refuses a stateDir outside repoPath (audit 2026-11-07 H1)", async () 
     expect(textOf(res)).toMatch(/stateDir/);
   }
   expect(manager.startCalls).toHaveLength(0);
+});
+
+test("preview sanitizes contested statements, reasons, and quotes before they reach the host agent", async () => {
+  const repoPath = await tmpRepo();
+  const manager = new StubJobManager();
+  const client = await connectedClient(manager);
+  await client.callTool({ name: "mine", arguments: { repo: "octo/repo", intent: "x", repoPath } });
+  const item = mkContested({
+    id: "x1",
+    statement: "see [docs](https://example.invalid) <img src=x>",
+    reason: "## heading",
+    sides: [{ statement: "<b>side</b>", evidence: [{ pr: 1, author: "a", association: "NONE", quote: "<img src=y>", createdAt: "2026-01-01T00:00:00Z", verified: true }] }],
+  });
+  manager.completeToReady({ draft: mkDraft([item]), provenance: mkProvenance([mkRule()], [item]), contested: [item] });
+  const preview = JSON.parse(textOf(await client.callTool({ name: "preview", arguments: {} })));
+  const out = preview.contested[0];
+  expect(out.statement).not.toMatch(/<img|\]\(/);
+  expect(out.reason.startsWith("\\#")).toBe(true);
+  expect(out.sides[0].statement).not.toContain("<b>");
+  expect(out.sides[0].evidence[0].quote).not.toContain("<img");
+  expect(preview.lowConfidenceNote).toBeUndefined();
 });

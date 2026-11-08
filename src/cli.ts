@@ -4,6 +4,7 @@ import type { Writable } from "node:stream";
 import { z, ZodError } from "zod";
 import { emitDraft, EmitRefusedError, type EmitTarget } from "./emitter/emit.js";
 import { finalizeDraft } from "./emitter/finalize.js";
+import { sanitize } from "./emitter/markers.js";
 import { confirmWriteQuestion, previewWrite } from "./emitter/mode.js";
 import { JobManager, type JobDeps, type JobManagerApi } from "./jobs/manager.js";
 import type { JobStatus } from "./jobs/registry.js";
@@ -293,7 +294,7 @@ export async function runMineCli(argv: string[], deps: CliDeps): Promise<number>
   // manual edit after the fact.
   for (const item of result.contested) {
     deps.stderr.write(
-      `${item.lowConfidence ? "low-confidence" : "contested"}: ${item.statement} — ${item.reason} (left out of the written file; resolve via the MCP write tool or edit manually)\n`,
+      `${item.lowConfidence ? "low-confidence" : "contested"}: ${sanitize(item.statement)} — ${sanitize(item.reason)} (left out of the written file; resolve via the MCP write tool or edit manually)\n`,
     );
   }
 

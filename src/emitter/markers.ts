@@ -77,31 +77,39 @@ const CODE_SPAN = /(?<![`\\])(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g;
 // Rule text is model output derived from untrusted PR text (audit 2026-11-07
 // H2), and the written file is read by coding agents and humans. Outside code
 // spans, make sure it can't render a link, image, autolink, or raw HTML:
-//   - "](" is split so no inline link/image forms (reference links need a
-//     line-initial definition, which whitespace collapsing above rules out);
+//   - "[" becomes "&#91;" so no inline link, reference link, or link reference
+//     definition can form (a field can start a block: the overview line, or
+//     the content of a "- " list item). CommonMark never treats an entity as
+//     structure. "](" is also split, belt and braces.
 //   - "<" is escaped, killing HTML tags and <scheme:...> autolinks;
-//   - "scheme://" and "www." are defanged so GFM bare-URL autolinks don't fire.
-// The text stays readable; the URL is still visible, just not clickable.
 //   - any backtick NOT part of a span matched here becomes "&#96;", so every
 //     field's spans are balanced on their own. Without this, a stray backtick
 //     in one field could pair with one in the next field rendered on the same
 //     line, and the renderer would see different span boundaries than this
 //     per-field split (letting HTML through in the other field).
+//   - URLs ("scheme://...", protocol-relative "//...", "www....", "mailto:...")
+//     are wrapped in a code span: linkifiers (GFM, markdown-it linkify) never look inside code, and
+//     the URL stays readable. A bracket defang like "https[:]//host" is not
+//     enough: markdown-it still links the "//host" part.
 // Where this splitter and a renderer could disagree (odd backtick nesting),
 // the splitter errs toward treating text as NOT code, i.e. over-escaping.
+// Finally, a field may be rendered at the start of a line or list item, so a
+// leading block marker (heading, quote, list, setext/thematic break, table,
+// fence) is backslash-escaped.
 function neutralizeLinksAndHtml(s: string): string {
   const neutralize = (t: string): string =>
     t
       .replaceAll("](", "] (")
+      .replaceAll("[", "&#91;")
       .replaceAll("<", "&lt;")
       .replaceAll("`", "&#96;")
-      .replace(/\b([a-z][a-z0-9+.-]*):\/\//gi, "$1[:]//")
-      .replace(/\bwww\./gi, "www[.]");
+      .replace(/(?:\b[a-z][a-z0-9+.-]*:)?\/\/\S*|\bwww\.\S*|\bmailto:\S*/gi, (url) => `\`${url}\``);
   let out = "";
   let last = 0;
   for (const m of s.matchAll(CODE_SPAN)) {
     out += neutralize(s.slice(last, m.index)) + m[0];
     last = m.index + m[0].length;
   }
-  return out + neutralize(s.slice(last));
+  out += neutralize(s.slice(last));
+  return out.replace(/^[#>+\-*=|_~]/, "\\$&").replace(/^(\d{1,9})([.)])/, "$1\\$2");
 }

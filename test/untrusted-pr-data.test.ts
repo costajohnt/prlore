@@ -158,9 +158,11 @@ test("sanitize neutralizes links, images, autolinks, bare URLs, and HTML outside
       "https://example.com/raw www.example.com <img src=x> <a href=\"//example.com\">a</a>",
   );
   expect(out).not.toContain("](");
-  expect(out).not.toContain("<");
-  expect(out).not.toMatch(/[a-z]+:\/\//i);
-  expect(out).not.toMatch(/\bwww\./i);
+  // URLs survive only inside code spans, where nothing linkifies.
+  const outsideCode = out.replace(/`[^`]*`/g, "");
+  expect(outsideCode).not.toContain("<");
+  expect(outsideCode).not.toMatch(/\/\//);
+  expect(outsideCode).not.toMatch(/\bwww\./i);
   // Still readable.
   expect(out).toContain("setup");
   expect(out).toContain("example.com/raw");

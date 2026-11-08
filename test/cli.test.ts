@@ -733,3 +733,12 @@ test("job warnings are printed to stderr; a reconcile fallback fails the run (ex
   expect(err()).toContain("every rule is unobservable; not written");
   expect(confirmed).toBe(false);
 });
+
+test("contested lines on stderr are sanitized", async () => {
+  const repoPath = await tmpRepo();
+  const item = mkContested({ id: "z", statement: "<img src=x> see https://example.invalid", reason: "r" });
+  const manager = new ScriptedJobManager([readyStatus()], { draft: mkDraft([item]), provenance: mkProvenance([mkRule()], [item]), contested: [item] });
+  const { stdout, stderr, err } = streams();
+  await runMineCli(baseArgv("octo/repo", repoPath, ["--dry-run"]), { makeDeps, manager, stdout, stderr, confirm: async () => false, pollIntervalMs: 0 });
+  expect(err()).toContain("contested: &lt;img src=x> see `https://example.invalid`");
+});

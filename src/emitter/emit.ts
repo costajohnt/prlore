@@ -229,6 +229,23 @@ function areaStubBody(area: string, target: string, rules: RuleRecord[]): string
   return `${lines.join("\n")}\n`;
 }
 
+// Commit the mined doc, its per-area files, and the provenance sidecar (ADR
+// 005: checked in); ignore everything else prlore keeps under `.prlore/`.
+function prloreGitignore(target: string): string {
+  return [
+    "# Written by prlore. Commit the mined doc, per-area files, and provenance",
+    "# sidecar; everything else here is local mining state (PR corpus,",
+    "# extraction cache, checkpoint).",
+    "*",
+    "!.gitignore",
+    `!${target}`,
+    "!provenance.json",
+    "!areas/",
+    "!areas/*.md",
+    "",
+  ].join("\n");
+}
+
 /**
  * Writes the mined `draft` for `targetInfo.target`. The full mined doc always
  * goes to `.prlore/<target>` (per-area files to `.prlore/areas/<area>.md`), and
@@ -262,6 +279,7 @@ export async function emitDraft(
   const rootPath = join(repoPath, target);
   const prloreTargetPath = join(repoPath, ".prlore", target);
   const sidecarPath = join(repoPath, ".prlore", "provenance.json");
+  const gitignorePath = join(repoPath, ".prlore", ".gitignore");
 
   // MineConfigSchema already rejects targets with path separators or "..";
   // this is the independent second gate (as areas get), since emitDraft is
@@ -270,7 +288,7 @@ export async function emitDraft(
   if (!isInsideRepo(repoPath, rootPath) || !isInsideRepo(prloreDir, prloreTargetPath)) {
     throw new Error(`refusing to write target "${target}": it resolves outside the repository`);
   }
-  for (const p of [rootPath, prloreTargetPath, sidecarPath]) {
+  for (const p of [rootPath, prloreTargetPath, sidecarPath, gitignorePath]) {
     if (!(await isConfinedOnDisk(repoPath, p))) {
       throw new Error(`refusing to write ${p}: it is a symlink or resolves outside the repository`);
     }
@@ -323,6 +341,13 @@ export async function emitDraft(
   const resolved = await Promise.all(
     planned.map(async (p) => ({ path: p.path, content: await p.content })),
   );
+
+  // `.prlore/` holds both the files meant to be committed and private mining
+  // state (PR corpus, extraction cache, checkpoint). Created once, never
+  // overwritten, so a user's own edits to it win.
+  if ((await readIfExists(gitignorePath)) === null) {
+    resolved.push({ path: gitignorePath, content: prloreGitignore(target) });
+  }
 
   for (const r of resolved) {
     await atomicWriteFile(r.path, r.content);

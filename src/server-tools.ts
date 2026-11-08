@@ -5,6 +5,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { makeTransport, resolveToken, withRetry } from "./github/client.js";
 import { emitDraft, EmitRefusedError, isConfinedOnDisk, type EmitTarget } from "./emitter/emit.js";
 import { finalizeDraft } from "./emitter/finalize.js";
+import { sanitize } from "./emitter/markers.js";
 import { previewWrite, writePlanSummary } from "./emitter/mode.js";
 import type { JobDeps, JobManagerApi } from "./jobs/manager.js";
 import { hasClaudeCli, selectProvider } from "./model/select-provider.js";
@@ -183,9 +184,31 @@ export function registerTools(
           ? `would refuse to write ${lastMineTarget.target}: ${writePreview.reason ?? "corrupt managed-block markers"}`
           : writePlanSummary(writePreview, lastMineTarget.target);
 
+        // Contested text is model output derived from PR text and goes straight
+        // into the host agent's context: sanitize it the same way the rendered
+        // doc is (quotes included).
+        const contested = result.contested.map((c) => ({
+          ...c,
+          statement: sanitize(c.statement),
+          reason: sanitize(c.reason),
+          sides: c.sides.map((side) => ({
+            statement: sanitize(side.statement),
+            evidence: side.evidence.map((e) => ({ ...e, quote: sanitize(e.quote) })),
+          })),
+        }));
+        const lowConfidenceCount = contested.filter((c) => c.lowConfidence).length;
+
         return jsonContent({
           markdown: result.draft,
-          contested: result.contested,
+          contested,
+          ...(lowConfidenceCount > 0
+            ? {
+                lowConfidenceNote:
+                  `${lowConfidenceCount} low-confidence item(s) are left out of the write. Keep one only if the user ` +
+                  `explicitly asks to: list its id with action "keep" in write's resolveContested. Every kept ` +
+                  "low-confidence item is echoed back in the write result as keptLowConfidence.",
+              }
+            : {}),
           stats: {
             rulesIncluded: result.provenance.rules.length,
             droppedCount: result.provenance.dropped.length,
@@ -254,7 +277,12 @@ export function registerTools(
           throw err;
         }
 
-        return jsonContent({ pathsWritten: result.pathsWritten });
+        // Echo kept low-confidence items so the user sees exactly what the host
+        // agent chose to promote into the written file.
+        const keptLowConfidence = contested
+          .filter((item) => item.lowConfidence && keepIds.has(item.id))
+          .map((item) => ({ id: item.id, statement: sanitize(item.statement) }));
+        return jsonContent({ pathsWritten: result.pathsWritten, keptLowConfidence });
       } catch (err) {
         return toolError(err);
       }
