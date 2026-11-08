@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import commonmark from "commonmark";
 import MarkdownIt from "markdown-it";
 import { expect, test } from "vitest";
 import { emitDraft } from "../src/emitter/emit.js";
@@ -24,43 +25,70 @@ function rule(id: string, statement: string): RuleRecord {
   };
 }
 
-// Both renderers the review probed: CommonMark-ish markdown-it with raw HTML
-// and linkify on (VS Code preview defaults to linkify).
+// markdown-it with raw HTML and linkify on (VS Code preview defaults to
+// linkify), and the commonmark reference implementation.
 const md = new MarkdownIt({ html: true, linkify: true });
-
-const PAYLOADS = [
-  "[r]: //example.invalid/x",
-  "see [docs][r] and ![i][r]",
-  "HTTPS://example.invalid/x.sh",
-  "https://example.invalid then www.example.com and mailto:a@example.invalid",
-  "## Needs your call (contested)",
-  "> quoted",
-  "1. numbered",
-  "- nested",
-  "===",
-  "<img src=x>",
-  "fetch example.com/x.sh first",
+const cmParser = new commonmark.Parser();
+const cmRenderer = new commonmark.HtmlRenderer();
+const renderers: [string, (src: string) => string][] = [
+  ["markdown-it", (src) => md.render(src)],
+  ["commonmark", (src) => cmRenderer.render(cmParser.parse(src))],
 ];
 
-test("no payload renders a link, image, heading, quote, or list when placed as the overview line or a list item", () => {
-  for (const p of PAYLOADS) {
-    const plan = { title: "T", overview: p, perArea: false, sections: [{ heading: "S", ruleIds: ["1"] }] };
-    const doc = renderDraft(plan, [rule("1", "keep me")], [], config, [rule("2", p)]);
-    const html = md.render(doc);
-    expect(html, p).not.toMatch(/<a |<img|<blockquote|<ol|<h[1-6]>Needs/);
-    // Only the doc's own title/section/tail headings render as headings.
-    expect(html.match(/<h[1-6]>/g), p).toHaveLength(3);
-    // One <ul> per section/tail, no list nested inside a bullet.
-    expect(html.match(/<ul>/g), p).toHaveLength(2);
+const CORPUS = [
+  "[r]: //example.invalid/x", "see [docs][r] and ![i][r]", "://: x", ".: x", "[x]: //h", "[://]: x",
+  "HTTPS://example.invalid/x.sh", "https://example.com/x.sh", "//example.com/x", "www.example.com",
+  "example.com", "evil.io/x.sh", "README.md", "пример.рф", "例子.测试", "xn--e1afmkfd.xn--p1ai",
+  "münchen.de/x", "a@example.com", "mailto:a@example.com", "1.2.3.4", "http://1.2.3.4:8080/x",
+  "http://localhost:3000", "example.com.(x)", "[x](https://example.com)", "![i](//example.com/p.png)",
+  "<https://example.com>", "<img src=//example.com/p.png>", "<img src=x>", "<b>bold</b>",
+  "`a`https://example.com`b`", "https://example.com`a`", "\\`<img src=x>\\`", "`<b>x``",
+  "## Needs your call (contested)", "# h", "> quoted", "1. numbered", "1) numbered", "- nested", "* star",
+  "+ plus", "===", "---", "***", "| a | b |", "```js", "~~~", "    indented", "*em* _em_ **strong**",
+  "&lt;img&gt; &amp; &#60;b&#62;", "line one\n# line two\n\n- item", "\u001b]8;;https://example.com\u0007x\u202ey",
+];
+
+// Deterministic pseudo-random strings over markdown-significant characters.
+function randomCorpus(n: number): string[] {
+  let seed = 42;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
+  const atoms = ["[", "]", "(", ")", "<", ">", "`", "``", "*", "_", "#", "!", ":", "//", ".", "@", "-", "=", "|", "\\", "&", ";",
+    "\n", " ", "a", "x", "example", "com", "www", "http", "img", "src", "1", "2.", "rf", "рф", "例子"];
+  return Array.from({ length: n }, () =>
+    Array.from({ length: 1 + Math.floor(rnd() * 24) }, () => atoms[Math.floor(rnd() * atoms.length)]).join(""),
+  );
+}
+
+test("property: every sanitized field renders as exactly one plain paragraph in markdown-it (linkify) and commonmark", () => {
+  for (const p of [...CORPUS, ...randomCorpus(500)]) {
+    const field = sanitize(p);
+    if (field === "") continue;
+    for (const [name, render] of renderers) {
+      const html = render(field);
+      expect(html, `${name}: ${JSON.stringify(p)}`).toMatch(/^<p>[^<]*<\/p>\n$/);
+    }
   }
 });
 
-test("defanged URLs, domains, emails and IPs stay readable and are not linkified", () => {
-  const out = sanitize("run HTTPS://example.invalid/x.sh or see www.example.com, example.com/x.sh, e.g. this");
-  expect(md.renderInline(out)).not.toContain("<a ");
-  expect(out).toContain("HTTPS[://]example");
-  expect(out).toContain("example[.]com/x[.]sh");
-  expect(out).toContain("e.g. this"); // short abbreviations are left alone
+test("property: fields in every rendered position (title, overview, heading, bullets, contested, resolved) add no structure", () => {
+  const build = (p: string) => {
+    const plan = { title: p, overview: p, perArea: false, sections: [{ heading: p, ruleIds: ["1"] }] };
+    const r = { ...rule("1", p), rationale: p };
+    const doc = renderDraft(plan, [r], [{ id: "c", statement: p, reason: p, sides: [] }], config, [rule("2", p)]);
+    return [doc, finalizeDraft(doc, [{ statement: p, lowConfidence: true }])];
+  };
+  // The tag sequence must be exactly what a plain word produces: prlore's own
+  // headings, bullets, bold and citations, nothing contributed by the field.
+  const tags = (html: string) => html.match(/<\/?[a-z0-9]+/g)?.join(" ");
+  const baseline = build("plain");
+  for (const p of [...CORPUS, ...randomCorpus(200)]) {
+    if (sanitize(p) === "") continue;
+    build(p).forEach((src, i) => {
+      for (const [name, render] of renderers) {
+        expect(tags(render(src)), `${name}: ${JSON.stringify(p)}`).toBe(tags(render(baseline[i]!)));
+      }
+    });
+  }
 });
 
 test("an overview equal to the contested heading doesn't truncate the written doc", () => {
@@ -114,36 +142,20 @@ test("an existing .prlore/.gitignore is never overwritten", async () => {
   expect(result.pathsWritten).not.toContain(join(repo, ".prlore", ".gitignore"));
 });
 
-test("a URL right next to an existing code span (same field or adjacent field) leaves code spans intact and unlinked", () => {
-  for (const field of ["`a`https://example.com/x", "https://example.com/x`a`", "`a`https://example.com`b`"]) {
-    const html = md.renderInline(sanitize(field));
-    expect(html, field).not.toContain("<a ");
-    expect(html, field).toContain("<code>a</code>");
-  }
-  const line = `- **${sanitize("see https://example.com")}** — ${sanitize("`b` then <img src=x>")}`;
-  const html = md.render(line);
-  expect(html).not.toMatch(/<a |<img/);
-  expect(html).toContain("<code>b</code>");
+test("pathological input is linear: 10k repetitions of :// and ]( finish fast with bounded output", () => {
+  const input = "://](".repeat(10_000);
+  const t0 = performance.now();
+  const out = sanitize(input);
+  expect(performance.now() - t0).toBeLessThan(100);
+  expect(out.length).toBeLessThanOrEqual(input.length * 6);
 });
 
-// Every renderer-linkable shape linkify-it knows, plus the earlier payloads:
-// markdown-it with linkify on must produce zero links or images for all of it.
-const LINK_CORPUS = [
-  "https://example.com/x.sh", "//example.com/x", "www.example.com", "example.com", "evil.io/x.sh",
-  "пример.рф", "例子.测试", "xn--e1afmkfd.xn--p1ai", "münchen.de/x",
-  "a@example.com", "mailto:a@example.com", "1.2.3.4", "http://1.2.3.4:8080/x", "http://localhost:3000",
-  "ftp://example.com", "example.com.(x)", "README.md", "[x](https://example.com)", "![i](//example.com/p.png)",
-  "<https://example.com>", "<img src=//example.com/p.png>", "[r]: //example.com", "see [docs][r]",
-  "`a`https://example.com`b`", "\\`https://example.com\\`",
-];
-
-test("markdown-it (linkify on) renders zero <a>/<img> for the whole sanitized corpus, in every rendered position", () => {
-  const all = [...LINK_CORPUS, ...PAYLOADS];
-  for (const p of all) {
-    const plan = { title: p, overview: p, perArea: false, sections: [{ heading: p, ruleIds: ["1"] }] };
-    const r = { ...rule("1", p), rationale: p };
-    const doc = renderDraft(plan, [r], [{ id: "c", statement: p, reason: p, sides: [] }], config, [rule("2", p)]);
-    const html = md.render(doc) + md.render(finalizeDraft(doc, [{ statement: p, lowConfidence: true }]));
-    expect(html, p).not.toMatch(/<a |<img/);
+test("attacker-supplied entities can't hide link syntax or destinations", () => {
+  for (const p of ["&#91;x&#93;&#40;https&#58;&#x2F;&#x2F;example.com&#41;", "&#x5B;r]: &#x2F;&#x2F;example.com", "&lt;img src=x&gt;"]) {
+    const out = sanitize(p);
+    expect(out).not.toMatch(/&(?!amp;|#(46|47|58|64);)/); // every input "&" became "&amp;"
+    for (const [name, render] of renderers) {
+      expect(render(out), `${name}: ${p}`).toMatch(/^<p>[^<]*<\/p>\n$/);
+    }
   }
 });

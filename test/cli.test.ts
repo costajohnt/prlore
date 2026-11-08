@@ -734,11 +734,12 @@ test("job warnings are printed to stderr; a reconcile fallback fails the run (ex
   expect(confirmed).toBe(false);
 });
 
-test("contested lines on stderr are sanitized", async () => {
+test("contested lines on stderr have terminal control and bidi characters stripped", async () => {
   const repoPath = await tmpRepo();
-  const item = mkContested({ id: "z", statement: "<img src=x> see https://example.invalid", reason: "r" });
+  const item = mkContested({ id: "z", statement: "a\u001b]8;;https://example.invalid\u0007b\u202ec", reason: "r\u001b[31m" });
   const manager = new ScriptedJobManager([readyStatus()], { draft: mkDraft([item]), provenance: mkProvenance([mkRule()], [item]), contested: [item] });
   const { stdout, stderr, err } = streams();
   await runMineCli(baseArgv("octo/repo", repoPath, ["--dry-run"]), { makeDeps, manager, stdout, stderr, confirm: async () => false, pollIntervalMs: 0 });
-  expect(err()).toContain("contested: &lt;img src=x> see https[://]example[.]invalid");
+  expect(err()).toContain("contested: a]8;;https://example.invalidbc — r[31m");
+  expect(err()).not.toMatch(/[\u001b\u0007\u202e]/);
 });

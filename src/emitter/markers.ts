@@ -56,94 +56,53 @@ export function isMarkerIssue(result: MarkerPositions | MarkerIssue): result is 
 // embedded newlines and the Unicode line separators JS `\s` covers) to a
 // single space keeps everything on one rendered line — no new heading, no
 // list-item break, no line-initial text a line-anchored consumer could mistake
-// for a real structural line. Marker stripping runs to a FIXPOINT, not just
-// one pass: a single pass is bypassable — "<<!--!-- prlore:end ---->>"
-// reassembles to "<!-- prlore:end -->" once the inner markers are removed — so
-// keep stripping until the string stops changing.
-export function sanitize(s: string): string {
-  let out = s.replace(/\s+/g, " ");
-  let prev: string;
-  do {
-    prev = out;
-    out = out.replaceAll("<!--", "").replaceAll("-->", "");
-  } while (out !== prev);
-  return neutralizeLinksAndHtml(out.trim());
+// for a real structural line. Escaping (below) also neutralizes any
+// "<!-- prlore:end -->" in the text.
+// Terminal control sequences (ESC/BEL/OSC hyperlinks, clipboard writes) and
+// bidi overrides have no place in a convention; drop them from anything printed
+// or written. Tab and newline are whitespace and handled by callers.
+export function stripControls(s: string): string {
+  return s.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, "");
 }
 
-// A CommonMark code span: a maximal backtick run (not backslash-escaped) closed
-// by the next run of exactly the same length. Inside one, nothing renders as a
-// link or HTML, so it's left verbatim (keeps `Array<string>` readable).
-const CODE_SPAN = /(?<![`\\])(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g;
+export function sanitize(s: string): string {
+  return escapeMarkdown(stripControls(s).replace(/\s+/g, " ").trim());
+}
 
 // Rule text is model output derived from untrusted PR text (audit 2026-11-07
-// H2), and the written file is read by coding agents and humans. Outside code
-// spans, make sure it can't render a link, image, autolink, or raw HTML:
-//   - "[" becomes "&#91;" so no inline link, reference link, or link reference
-//     definition can form (a field can start a block: the overview line, or
-//     the content of a "- " list item). CommonMark never treats an entity as
-//     structure. "](" is also split, belt and braces.
-//   - "<" is escaped, killing HTML tags and <scheme:...> autolinks;
-//   - any backtick NOT part of a span matched here becomes "&#96;", so every
-//     field's spans are balanced on their own. Without this, a stray backtick
-//     in one field could pair with one in the next field rendered on the same
-//     line, and the renderer would see different span boundaries than this
-//     per-field split (letting HTML through in the other field).
-//   - Anything a linkifier would turn into a link is defanged in place:
-//     linkify-it (the matcher markdown-it's linkify uses) finds URLs, bare and
-//     Unicode/punycode domains, emails and IPs; each match gets "." -> "[.]"
-//     and "://" -> "[://]", which no linkifier matches and a reader still
-//     understands. No code spans are added, so backtick runs never change.
-//     A regex pass then defangs any leftover "scheme://", "//host", "www."
-//     or "mailto:" linkify-it didn't report.
-// Where this splitter and a renderer could disagree (odd backtick nesting),
-// the splitter errs toward treating text as NOT code, i.e. over-escaping.
-// Finally, a field may be rendered at the start of a line or list item, so a
-// leading block marker (heading, quote, list, setext/thematic break, table,
-// fence) is backslash-escaped.
+// H2), and the written file is read by coding agents and humans. Structural
+// rule instead of chasing constructs one by one:
+//   1. Every ASCII punctuation character is backslash-escaped. CommonMark
+//      allows escaping all of them, and an escaped character never starts
+//      or ends structure, so no emphasis, link, reference definition, image,
+//      heading, list, quote, table, HTML, entity, or code span can form, at
+//      line start or mid-line, in this field or across fields. Untrusted code
+//      renders as escaped plain text; that's the accepted cost.
+//   2. Anything linkify-it (the matcher behind markdown-it's linkify) would
+//      link, including bare/Unicode/punycode domains, emails and IPs, gets its
+//      separators (. : / @) entity-encoded instead. Entities and escapes both
+//      split markdown-it's text tokens, so no linkifier sees a whole host.
+//   3. Whitespace (including newlines) was already collapsed to single spaces
+//      above, so a field can never start a new block.
+// "&" becomes "&amp;" so input can't smuggle entities (e.g. "&#91;" or
+// "&#x2F;") past the escaping or the linkify pass. Single pass, linear time:
+// output is at most 6 chars per input char. "<!-- prlore:end -->" in input
+// comes out escaped, so it can never match the emitter's marker strings.
+// ponytail: matches are computed on the plain text; GFM's own autolinker isn't
+// tested here (no JS port), markdown-it + commonmark are.
 const linkify = new LinkifyIt(undefined, { fuzzyLink: true, fuzzyEmail: true, fuzzyIP: true });
+const ASCII_PUNCT = /[!-/:-@[-`{-~]/;
 
-const escapeText = (t: string): string =>
-  t.replaceAll("[", "&#91;").replaceAll("<", "&lt;").replaceAll("`", "&#96;");
-
-const defang = (t: string): string =>
-  t
-    .replaceAll("://", "[://]")
-    .replace(/(?<!:)\/\/(?=\S)/g, "/[/]")
-    .replace(/\bwww\./gi, "www[.]")
-    .replace(/\bmailto:/gi, "mailto[:]");
-
-// Defang every linkify-it match (and the regex leftovers) until nothing
-// changes: a defang can create new context ("src=//host" -> "src=/[/]host"
-// makes "host" a fuzzy link), so one pass isn't enough. Anything linkify-it
-// still matches after that gets its separators entity-encoded, which splits
-// markdown-it's text tokens so no linkifier sees a host.
-function neutralizeText(raw: string): string {
-  let t = escapeText(raw.replaceAll("](", "] ("));
-  for (;;) {
-    let next = "";
-    let last = 0;
-    for (const m of linkify.match(t) ?? []) {
-      next += t.slice(last, m.index) + t.slice(m.index, m.lastIndex).replaceAll(".", "[.]");
-      last = m.lastIndex;
-    }
-    next = defang(next + t.slice(last)).replaceAll("](", "] (");
-    if (next === t) break;
-    t = next;
-  }
-  for (const m of [...(linkify.match(t) ?? [])].reverse()) {
-    const encoded = t.slice(m.index, m.lastIndex).replace(/[.:/@]/g, (c) => `&#${c.charCodeAt(0)};`);
-    t = t.slice(0, m.index) + encoded + t.slice(m.lastIndex);
-  }
-  return t;
-}
-
-function neutralizeLinksAndHtml(s: string): string {
+function escapeMarkdown(text: string): string {
+  const inLink = new Uint8Array(text.length);
+  for (const m of linkify.match(text) ?? []) inLink.fill(1, m.index, m.lastIndex);
   let out = "";
-  let last = 0;
-  for (const m of s.matchAll(CODE_SPAN)) {
-    out += neutralizeText(s.slice(last, m.index)) + m[0];
-    last = m.index + m[0].length;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (c === "&") out += "&amp;"; // first: no attacker-supplied entity survives
+    else if (inLink[i] && /[.:/@]/.test(c)) out += `&#${c.charCodeAt(0)};`;
+    else if (ASCII_PUNCT.test(c)) out += `\\${c}`;
+    else out += c;
   }
-  out += neutralizeText(s.slice(last));
-  return out.replace(/^[#>+\-*=|_~]/, "\\$&").replace(/^(\d{1,9})([.)])/, "$1\\$2");
+  return out;
 }
