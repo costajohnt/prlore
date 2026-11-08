@@ -2,6 +2,7 @@ import { z } from "zod";
 import { BudgetExceededError, type ModelProvider } from "../model/provider.js";
 import { GeneralitySchema, type EvidenceRecord, type Generality } from "../schemas/provenance.js";
 import type { VerifiedCandidate } from "./verify-evidence.js";
+import { UNTRUSTED_DATA_RULE, untrustedFence } from "../util/untrusted.js";
 
 export interface Cluster {
   id: number;
@@ -45,7 +46,9 @@ even if phrased differently. If two groups give OPPOSITE guidance about the same
 conflictsWithGroup on one group to the other group's index in the groups array. Also tag each
 group's generality: "site-specific" if the rule only matters when touching one particular
 function/file/internal (e.g. it names a specific helper), "area" if it applies to one subsystem,
-or "repo-wide" if any contributor would hit it. Respond with ONLY JSON matching the schema.`;
+or "repo-wide" if any contributor would hit it. Respond with ONLY JSON matching the schema.
+
+${UNTRUSTED_DATA_RULE}`;
 
 // Fixed enumeration order: buckets are processed in this order regardless of input order,
 // so global cluster ids are deterministic across runs for the same candidate set.
@@ -188,7 +191,7 @@ export async function clusterCandidates(
     let draft: ClusterDraft;
     let usedFallback = false;
     try {
-      const prompt = bucket.map((c, i) => `[${i}] ${c.statement} (${c.polarity})`).join("\n");
+      const prompt = untrustedFence()(bucket.map((c, i) => `[${i}] ${c.statement} (${c.polarity})`).join("\n"));
       draft = await provider.complete({
         system: SYSTEM,
         prompt,

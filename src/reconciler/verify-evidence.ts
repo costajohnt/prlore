@@ -98,3 +98,65 @@ export function verifyEvidence(
     }),
   }));
 }
+
+// Evidence binding (audit 2026-11-07 H2). Verification above proves a quote
+// exists in the PR and who wrote it, but the rule's `statement` is model-written
+// and was never tied to that quote: a PR body can steer extraction into pairing
+// an arbitrary statement with an unrelated maintainer line ("Thanks, closing.")
+// and inherit that maintainer's authority. This is a cheap lexical check, no
+// extra model call: the share of the statement's content words that also appear
+// in the quote.
+//
+// LOW_CONFIDENCE_OVERLAP = 0.2 means "fewer than one in five of the statement's
+// content words appear in the quote". Kept deliberately low because a flagged
+// rule is held out of the written file until a human keeps it: a faithful
+// paraphrase of a reviewer keeps the key nouns (API, tool, file type) and
+// clears it easily, while a statement attached to an unrelated quote scores ~0.
+// Raise it only with evidence from real mines that it misses bad bindings.
+export const LOW_CONFIDENCE_OVERLAP = 0.2;
+
+// Words that carry no topic: articles, modal/rule verbs, connectives. Dropping
+// them stops "we should always use X" from overlapping "always use Y".
+const STOPWORDS = new Set(
+  ("the and for are but not you all any can our out use uses used using with this that these those " +
+    "from into onto than then when what which while where who why how its it's was were has have had " +
+    "should must always never prefer avoid instead rather over please don't dont also just like make " +
+    "sure here there them they their your we're let's lets via per each every more less some one").split(" "),
+);
+
+// ponytail: 4-char prefix is a crude stemmer (tests/testing, export/exports);
+// non-space-separated scripts (CJK) tokenize as one long word. Swap in a real
+// stemmer/segmenter if real mines show false flags.
+function contentStems(s: string): Set<string> {
+  const out = new Set<string>();
+  for (const word of s.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? []) {
+    if (word.length < 3 || STOPWORDS.has(word)) continue;
+    out.add(word.slice(0, 4));
+  }
+  return out;
+}
+
+/** Share (0..1) of the statement's content words that also appear in the quote. */
+export function lexicalOverlap(statement: string, quote: string): number {
+  const stems = contentStems(statement);
+  if (stems.size === 0) return 0;
+  const quoteStems = contentStems(quote);
+  let shared = 0;
+  for (const s of stems) if (quoteStems.has(s)) shared++;
+  return shared / stems.size;
+}
+
+// Low confidence = none of the verified quotes at the rule's top authority tier
+// (the ones that set its score and can exempt it from the recurrence floor)
+// lexically supports the statement. Checking only the top tier matters: an
+// outsider's own matching quote must not vouch for a statement whose authority
+// comes from an unrelated maintainer quote. Rules with no verified evidence are
+// left alone; scoring already caps them below the include threshold.
+export function isLowConfidence(statement: string, evidence: EvidenceRecord[]): boolean {
+  const verified = evidence.filter((e) => e.verified);
+  if (verified.length === 0) return false;
+  const top = Math.max(...verified.map((e) => authorityRank(e.association)));
+  return !verified.some(
+    (e) => authorityRank(e.association) === top && lexicalOverlap(statement, e.quote) >= LOW_CONFIDENCE_OVERLAP,
+  );
+}

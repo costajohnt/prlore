@@ -272,12 +272,12 @@ test("Fix 7: a newline-smuggled heading in a statement renders on one line with 
   const out = renderDraft(plan, [injected], [], baseConfig);
 
   expect(out).not.toMatch(/\n## Injected/);
-  expect(out).toContain("evil ## Injected"); // collapsed onto one line, whitespace-joined
+  expect(out).toContain(String.raw`evil \#\# Injected`); // collapsed onto one line, whitespace-joined, punctuation escaped
   const lines = out.split("\n");
   expect(lines.filter((l) => l.startsWith("## "))).toEqual(["## Core"]); // no extra heading line
 });
 
-test("Fix 7: an HTML comment marker in a statement is stripped so it can't close/reopen a structural comment", () => {
+test("Fix 7: an HTML comment marker in a statement is escaped so it can't close/reopen a structural comment", () => {
   const injected = mkRule("r1", 0.9, { statement: "close it <!-- prlore:end --> then more" });
   const plan: DocPlan = { title: "T", overview: "o", perArea: false, sections: [{ heading: "Core", ruleIds: ["r1"] }] };
 
@@ -287,10 +287,10 @@ test("Fix 7: an HTML comment marker in a statement is stripped so it can't close
   // model-derived statement's markers must be stripped.
   expect(out.split("<!--").length - 1).toBe(1);
   expect(out.split("-->").length - 1).toBe(1);
-  expect(out).toContain("close it  prlore:end  then more");
+  expect(out).toContain(String.raw`close it \<\!\-\- prlore\:end \-\-\> then more`);
 });
 
-test("Fix 7 re-review: nested markers that reassemble after one strip are removed to fixpoint", () => {
+test("Fix 7 re-review: nested markers can't reassemble into a live marker", () => {
   // Single-pass bypass: stripping the inner "<!--" / "-->" from this string
   // reassembles the outer characters into a fresh "<!-- prlore:end -->".
   const injected = mkRule("r1", 0.9, { statement: "pwn <<!--!-- prlore:end ---->> done" });
@@ -328,11 +328,11 @@ test("Fix 7: sanitizer applies to rationale, title, overview, section heading, a
   // Only the ONE static generator-header comment marker may remain.
   expect(out.split("<!--").length - 1).toBe(1);
   expect(out.split("-->").length - 1).toBe(1);
-  expect(out).toContain("# Title ## injected");
-  expect(out).toContain("overview  prlore:end");
+  expect(out).toContain(String.raw`# Title \#\# injected`);
+  expect(out).toContain(String.raw`overview \<\!\-\- prlore\:end \-\-\>`);
   expect(out).toContain("## Section heading");
-  expect(out).toContain("bad ## heading in rationale");
-  expect(out).toContain("statement ## boom — reason  x");
+  expect(out).toContain(String.raw`bad \#\# heading in rationale`);
+  expect(out).toContain(String.raw`statement \#\# boom — reason \<\!\-\- x \-\-\>`);
 });
 
 // ---- Hardening: EOF normalization + trending-away [fading] prefix ---------

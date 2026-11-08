@@ -4,7 +4,8 @@ import type { Writable } from "node:stream";
 import { z, ZodError } from "zod";
 import { emitDraft, EmitRefusedError, type EmitTarget } from "./emitter/emit.js";
 import { finalizeDraft } from "./emitter/finalize.js";
-import { confirmWriteQuestion, previewEmitMode } from "./emitter/mode.js";
+import { stripControls } from "./emitter/markers.js";
+import { confirmWriteQuestion, previewWrite } from "./emitter/mode.js";
 import { JobManager, type JobDeps, type JobManagerApi } from "./jobs/manager.js";
 import type { JobStatus } from "./jobs/registry.js";
 import { MineConfigSchema, type MineConfig } from "./schemas/mine-config.js";
@@ -58,7 +59,9 @@ export const USAGE = `usage: prlore mine <owner/repo> [options]
   --base-url <url>            base URL for --provider openai
                              (or OPENAI_BASE_URL); ignored by other providers
   --repo-path <path>         local checkout to mine against (default: cwd)
-  --target <file>            output file (default: AGENTS.md)
+  --target <file>            output file name (default: AGENTS.md); the mined
+                             doc goes to .prlore/<file> and <file> gets a
+                             short pointer block
   --max-rules <n>             cap on rules rendered in full detail; the rest
                              render as compact one-liners in a trailing
                              section (default: 60; must be a positive
@@ -291,7 +294,7 @@ export async function runMineCli(argv: string[], deps: CliDeps): Promise<number>
   // manual edit after the fact.
   for (const item of result.contested) {
     deps.stderr.write(
-      `contested: ${item.statement} — ${item.reason} (left out of the written file; resolve via the MCP write tool or edit manually)\n`,
+      `${item.lowConfidence ? "low-confidence" : "contested"}: ${stripControls(item.statement)} — ${stripControls(item.reason)} (left out of the written file; resolve via the MCP write tool or edit manually)\n`,
     );
   }
 
@@ -313,17 +316,14 @@ export async function runMineCli(argv: string[], deps: CliDeps): Promise<number>
     return 0;
   }
 
-  // Name what will actually be written given the resolved mode: pointer mode
-  // (an unmarked human <target> exists, or the repo already adopted it) writes
-  // the full doc to .prlore/<target> and only appends a pointer block to the
-  // human file; direct mode writes <target> itself. Read-only, shares the exact
-  // detection the MCP preview uses so the two can't drift.
+  // Name what will actually be written: the full doc to .prlore/<target> and
+  // only a pointer block in <target>. Read-only, shares the exact detection the
+  // MCP preview uses so the two can't drift.
   let shouldWrite: boolean;
   if (parsed.yes) {
     shouldWrite = true;
   } else {
-    const modePreview = await previewEmitMode(repoPath, config.output.target);
-    shouldWrite = await deps.confirm(confirmWriteQuestion(modePreview.mode, config.output.target));
+    shouldWrite = await deps.confirm(confirmWriteQuestion(await previewWrite(repoPath, config.output.target), config.output.target));
   }
   if (!shouldWrite) {
     deps.stderr.write("not written\n");

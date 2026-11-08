@@ -2,25 +2,27 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { BEGIN, END, checkMarkers, isMarkerIssue } from "./markers.js";
 
-// Shared, READ-ONLY mode preview. emit.ts's resolveMode picks the emission mode
-// from durable filesystem state and THROWS EmitRefusedError on a damaged managed
-// file; the CLI confirm prompt and the MCP `preview` tool need the SAME decision
-// as a plain value (which mode, would it refuse, why) WITHOUT writing or throwing
-// for an ordinary not-yet-managed file. Keeping this in one module means cli.ts
-// and server-tools.ts can never disagree with each other about the resolved mode,
-// and it mirrors emit.ts's resolveMode rule order exactly so the preview can't
-// lie about what emitDraft will do.
+// Shared, READ-ONLY write preview. emitDraft always writes the mined doc to
+// `.prlore/<target>` and only a pointer block to the root `<target>`, and it
+// THROWS EmitRefusedError on a damaged managed file; the CLI confirm prompt and
+// the MCP `preview` tool need the same decision as a plain value (would it
+// refuse, why) WITHOUT writing or throwing. Keeping this in one module means
+// cli.ts and server-tools.ts can never disagree, and it mirrors emit.ts's
+// refusal checks so the preview can't lie about what emitDraft will do.
 
-export type EmitMode = "direct" | "pointer";
-
-export interface EmitModePreview {
-  mode: EmitMode;
+export interface WritePreview {
   // Whether the root `<target>` file already exists.
   targetExists: boolean;
   // True when emitDraft would throw EmitRefusedError for this repo state.
   wouldRefuse: boolean;
   // The marker-issue reason behind a predicted refusal (undefined otherwise).
   reason?: string;
+  // The root `<target>` carries a valid prlore block but `.prlore/<target>`
+  // doesn't exist yet: a repo from before pointer mode was the only mode, whose
+  // root block held the full mined doc. The write replaces that block with the
+  // pointer (prose outside the markers untouched) and the doc moves to
+  // `.prlore/<target>`.
+  migrating: boolean;
 }
 
 async function readIfExists(path: string): Promise<string | null> {
@@ -32,71 +34,43 @@ async function readIfExists(path: string): Promise<string | null> {
   }
 }
 
-// A root file carries a "lone" or corrupt marker when checkMarkers reports an
-// issue AND at least one of BEGIN/END is physically present — a damaged managed
-// file emit.ts refuses to guess at, NOT clean human prose (which has neither).
-function loneOrCorruptReason(content: string): string | null {
-  const result = checkMarkers(content);
-  if (!isMarkerIssue(result)) return null;
-  if (content.includes(BEGIN) || content.includes(END)) return result.reason;
-  return null; // neither marker present → clean human file, safe to adopt
-}
+export async function previewWrite(repoPath: string, target: string): Promise<WritePreview> {
+  const prloreContent = await readIfExists(join(repoPath, ".prlore", target));
+  const rootContent = await readIfExists(join(repoPath, target));
+  const targetExists = rootContent !== null;
 
-// Mirrors emit.ts's resolveMode + its per-target refusal checks (spec §Mode
-// resolution / §What still refuses), but read-only and boolean-returning.
-export async function previewEmitMode(repoPath: string, target: string): Promise<EmitModePreview> {
-  const rootPath = join(repoPath, target);
-  const prloreTargetPath = join(repoPath, ".prlore", target);
-
-  // Rule 1 (sticky): `.prlore/<target>` exists → pointer mode. prlore owns that
-  // file, so an unmarked/corrupt block there refuses; the root pointer block is
-  // replaced in place, so a lone/corrupt marker in the root refuses too.
-  const prloreContent = await readIfExists(prloreTargetPath);
+  // prlore owns `.prlore/<target>`, so any marker issue there refuses.
   if (prloreContent !== null) {
-    const rootContent = await readIfExists(rootPath);
-    const targetExists = rootContent !== null;
-    const prloreCheck = checkMarkers(prloreContent);
-    if (isMarkerIssue(prloreCheck)) {
-      return { mode: "pointer", targetExists, wouldRefuse: true, reason: prloreCheck.reason };
-    }
-    const rootReason = rootContent !== null ? loneOrCorruptReason(rootContent) : null;
-    if (rootReason !== null) {
-      return { mode: "pointer", targetExists, wouldRefuse: true, reason: rootReason };
-    }
-    return { mode: "pointer", targetExists, wouldRefuse: false };
+    const check = checkMarkers(prloreContent);
+    if (isMarkerIssue(check)) return { targetExists, wouldRefuse: true, reason: check.reason, migrating: false };
   }
+  if (rootContent === null) return { targetExists, wouldRefuse: false, migrating: false };
 
-  // Rule 2: no root file → direct fresh-wrap.
-  const rootContent = await readIfExists(rootPath);
-  if (rootContent === null) return { mode: "direct", targetExists: false, wouldRefuse: false };
-
-  // Rule 3: valid marker pair → direct in-place replace (backward compatible).
-  const markers = checkMarkers(rootContent);
-  if (!isMarkerIssue(markers)) return { mode: "direct", targetExists: true, wouldRefuse: false };
-
-  // Rule 4: NEITHER marker present → pointer adoption (append a pointer block).
-  if (!rootContent.includes(BEGIN) && !rootContent.includes(END)) {
-    return { mode: "pointer", targetExists: true, wouldRefuse: false };
+  // Root with NEITHER marker is human prose: the pointer block is appended.
+  // A valid pair is replaced in place. A lone/corrupt marker is a damaged
+  // managed file emit.ts refuses to guess at.
+  const rootCheck = checkMarkers(rootContent);
+  if (isMarkerIssue(rootCheck)) {
+    if (rootContent.includes(BEGIN) || rootContent.includes(END)) {
+      return { targetExists, wouldRefuse: true, reason: rootCheck.reason, migrating: false };
+    }
+    return { targetExists, wouldRefuse: false, migrating: false };
   }
-
-  // A lone/corrupt marker in the root (with no `.prlore/<target>` yet) is a
-  // damaged managed file: emit.ts's resolveMode throws before choosing a mode.
-  return { mode: "direct", targetExists: true, wouldRefuse: true, reason: markers.reason };
+  return { targetExists, wouldRefuse: false, migrating: prloreContent === null };
 }
 
-// The confirm-prompt question, phrased for the resolved mode. Pointer mode names
-// BOTH the prlore-owned file it writes and the human file it appends a pointer
-// to, so the user knows their hand-authored `<target>` is only ever appended to.
-export function confirmWriteQuestion(mode: EmitMode, target: string): string {
-  return mode === "pointer"
-    ? `Write .prlore/${target} and add a pointer block to ${target}?`
-    : `Write ${target}?`;
+// The confirm-prompt question. Names BOTH the prlore-owned file and the root
+// file, so the user knows their hand-authored `<target>` only gets a pointer.
+export function confirmWriteQuestion(preview: WritePreview, target: string): string {
+  return preview.migrating
+    ? `Write .prlore/${target} and replace prlore's block in ${target} with a pointer?`
+    : `Write .prlore/${target} and add a pointer block to ${target}?`;
 }
 
 // A one-line, non-interrogative summary of what a write will do, for the MCP
 // `preview` tool output (which is structured data, not a y/N prompt).
-export function writePlanSummary(mode: EmitMode, target: string): string {
-  return mode === "pointer"
-    ? `will write .prlore/${target} and add a pointer block to ${target}`
-    : `will write ${target}`;
+export function writePlanSummary(preview: WritePreview, target: string): string {
+  return preview.migrating
+    ? `will write .prlore/${target} and replace prlore's managed block in ${target} with a pointer block`
+    : `will write .prlore/${target} and add a pointer block to ${target}`;
 }

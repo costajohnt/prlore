@@ -5,6 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { buildServer } from "../src/server.js";
+import { sanitize } from "../src/emitter/markers.js";
 import type { GqlTransport } from "../src/github/client.js";
 import type { JobDeps, JobManagerApi, JobResult } from "../src/jobs/manager.js";
 import type { JobStatus } from "../src/jobs/registry.js";
@@ -200,17 +201,18 @@ test("mine -> status -> preview -> write happy path", async () => {
   expect(preview.stats).toEqual({ rulesIncluded: 1, droppedCount: 0, contestedCount: 0 });
   expect(preview.targetExists).toBe(false);
   expect(preview.wouldRefuse).toBe(false);
-  expect(preview.mode).toBe("direct"); // no root AGENTS.md → direct fresh-wrap
-  expect(preview.writePlan).toMatch(/AGENTS\.md/);
+  expect(preview.writePlan).toBe("will write .prlore/AGENTS.md and add a pointer block to AGENTS.md");
   expect(typeof preview.confirmToken).toBe("string");
 
   const writeRes = await client.callTool({ name: "write", arguments: { confirmToken: preview.confirmToken } });
   expect(writeRes.isError).toBeFalsy();
   const writeOut = JSON.parse(textOf(writeRes));
   expect(writeOut.pathsWritten).toContain(join(repoPath, "AGENTS.md"));
+  expect(writeOut.pathsWritten).toContain(join(repoPath, ".prlore", "AGENTS.md"));
 
-  const written = await readFile(join(repoPath, "AGENTS.md"), "utf8");
+  const written = await readFile(join(repoPath, ".prlore", "AGENTS.md"), "utf8");
   expect(written).toContain("Always write tests first");
+  expect(await readFile(join(repoPath, "AGENTS.md"), "utf8")).not.toContain("Always write tests first");
 });
 
 // ---- write without a preview -------------------------------------------------
@@ -268,11 +270,15 @@ test("resolveContested: kept items are appended as resolved, dropped/unresolved 
   const kept = mkContested({ id: "keep-1", statement: "Prefer tabs" });
   const dropped = mkContested({ id: "drop-1", statement: "Prefer spaces" });
   const unresolved = mkContested({ id: "unresolved-1", statement: "Prefer four-space indents" });
-  const contested = [kept, dropped, unresolved];
+  const keptLow = mkContested({ id: "low-1", statement: "Name files in kebab-case", reason: "low confidence", lowConfidence: true });
+  const contested = [kept, dropped, unresolved, keptLow];
   manager.completeToReady({ draft: mkDraft(contested), provenance: mkProvenance([mkRule()], contested), contested });
 
   const preview = JSON.parse(textOf(await client.callTool({ name: "preview", arguments: {} })));
   expect(preview.markdown).toContain("Needs your call (contested)");
+  // Low-confidence gate is stated plainly to the host agent.
+  expect(preview.lowConfidenceNote).toMatch(/1 low-confidence item/);
+  expect(preview.lowConfidenceNote).toMatch(/explicitly asks/);
 
   const writeRes = await client.callTool({
     name: "write",
@@ -281,16 +287,20 @@ test("resolveContested: kept items are appended as resolved, dropped/unresolved 
       resolveContested: [
         { id: "keep-1", action: "keep" },
         { id: "drop-1", action: "drop" },
+        { id: "low-1", action: "keep" },
       ],
     },
   });
   expect(writeRes.isError).toBeFalsy();
+  // Kept low-confidence items are echoed back so the user sees them.
+  expect(JSON.parse(textOf(writeRes)).keptLowConfidence).toEqual([{ id: "low-1", statement: sanitize("Name files in kebab-case") }]);
 
-  const written = await readFile(join(repoPath, "AGENTS.md"), "utf8");
+  const written = await readFile(join(repoPath, ".prlore", "AGENTS.md"), "utf8");
   expect(written).toContain("Prefer tabs");
   expect(written).toContain("_(resolved)_");
+  expect(written).toContain(`- **[low confidence] ${sanitize("Name files in kebab-case")}** _(resolved)_`);
   expect(written).not.toContain("Prefer spaces");
-  expect(written).not.toContain("Prefer four-space indents");
+  expect(written).not.toContain(sanitize("Prefer four-space indents"));
   expect(written).not.toContain("Needs your call (contested)");
 });
 
@@ -414,7 +424,6 @@ test("preview reports pointer mode (not refusal) for an unmarked human AGENTS.md
   const preview = JSON.parse(textOf(await client.callTool({ name: "preview", arguments: {} })));
   expect(preview.targetExists).toBe(true);
   expect(preview.wouldRefuse).toBe(false);
-  expect(preview.mode).toBe("pointer");
   expect(preview.writePlan).toMatch(/\.prlore\/AGENTS\.md/);
   expect(preview.writePlan).toMatch(/pointer block/i);
 
@@ -510,13 +519,13 @@ test("a rule statement containing the literal contested-header text does not tru
   const writeRes = await client.callTool({ name: "write", arguments: { confirmToken: preview.confirmToken } });
   expect(writeRes.isError).toBeFalsy();
 
-  const written = await readFile(join(repoPath, "AGENTS.md"), "utf8");
+  const written = await readFile(join(repoPath, ".prlore", "AGENTS.md"), "utf8");
   // Both real rules survive — a `lastIndexOf` anchor keeps the poisoned bullet's
   // embedded header text from being mistaken for the real (last) header.
   expect(written).toContain(poisonRule.statement);
   expect(written).toContain(laterRule.statement);
   // The real (unresolved) contested item is still stripped as usual.
-  expect(written).not.toContain("Use tabs, not spaces");
+  expect(written).not.toContain(sanitize("Use tabs, not spaces"));
   // Only the poison rule's embedded occurrence remains; the genuine heading is gone.
   const headerOccurrences = written.split("## Needs your call (contested)").length - 1;
   expect(headerOccurrences).toBe(1);
@@ -579,10 +588,10 @@ test("a contested item's statement embedding the literal header text does not de
   const writeRes = await client.callTool({ name: "write", arguments: { confirmToken: preview.confirmToken } });
   expect(writeRes.isError).toBeFalsy();
 
-  const written = await readFile(join(repoPath, "AGENTS.md"), "utf8");
+  const written = await readFile(join(repoPath, ".prlore", "AGENTS.md"), "utf8");
   expect(written).not.toContain("Needs your call (contested)");
-  expect(written).not.toContain("Use tabs, not spaces");
-  expect(written).not.toContain("Mentions ## Needs your call");
+  expect(written).not.toContain(sanitize("Use tabs, not spaces"));
+  expect(written).not.toContain(sanitize("Mentions ## Needs your call"));
   expect(written).toContain("Always write tests first");
 });
 
@@ -628,4 +637,26 @@ test("mine refuses a stateDir outside repoPath (audit 2026-11-07 H1)", async () 
     expect(textOf(res)).toMatch(/stateDir/);
   }
   expect(manager.startCalls).toHaveLength(0);
+});
+
+test("preview sanitizes contested statements, reasons, and quotes before they reach the host agent", async () => {
+  const repoPath = await tmpRepo();
+  const manager = new StubJobManager();
+  const client = await connectedClient(manager);
+  await client.callTool({ name: "mine", arguments: { repo: "octo/repo", intent: "x", repoPath } });
+  const item = mkContested({
+    id: "x1",
+    statement: "see [docs](https://example.invalid) <img src=x>",
+    reason: "## heading",
+    sides: [{ statement: "<b>side</b>", evidence: [{ pr: 1, author: "a", association: "NONE", quote: "<img src=y>", createdAt: "2026-01-01T00:00:00Z", verified: true }] }],
+  });
+  manager.completeToReady({ draft: mkDraft([item]), provenance: mkProvenance([mkRule()], [item]), contested: [item] });
+  const preview = JSON.parse(textOf(await client.callTool({ name: "preview", arguments: {} })));
+  const out = preview.contested[0];
+  expect(out.statement).toBe(sanitize(item.statement));
+  expect(out.statement).not.toBe(item.statement);
+  expect(out.reason).toBe(sanitize("## heading"));
+  expect(out.sides[0].statement).toBe(sanitize("<b>side</b>"));
+  expect(out.sides[0].evidence[0].quote).toBe(sanitize("<img src=y>"));
+  expect(preview.lowConfidenceNote).toBeUndefined();
 });

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { BudgetExceededError, type ModelProvider } from "../model/provider.js";
 import type { EvidenceRecord } from "../schemas/provenance.js";
 import type { ReconciledRule } from "./reconcile.js";
+import { UNTRUSTED_DATA_RULE, untrustedFence } from "../util/untrusted.js";
 
 // v0.3 Task 3: clustering runs per category bucket (cluster.ts's CATEGORIES loop), so
 // two rules stating the same underlying norm from different buckets (e.g. a
@@ -44,7 +45,9 @@ different words (e.g. "gate TTY-only output behind isatty()" and "don't print AN
 not attached to a terminal" are the same rule). Propose sets of ids that should be merged because
 they assert the same norm. Only propose a merge when you are confident the rules mean the same
 thing — do not merge rules that are merely related or in the same topic area. Respond with ONLY
-JSON matching the schema.`;
+JSON matching the schema.
+
+${UNTRUSTED_DATA_RULE}`;
 
 // The prompt's first line is a distinguishing marker so callers (including test
 // doubles) can route this call without confusing it for the cluster call's bare
@@ -52,7 +55,7 @@ JSON matching the schema.`;
 // prefixes.
 function buildPrompt(rules: ReconciledRule[]): string {
   const lines = rules.map((r) => `[${r.id}] ${r.statement}`);
-  return ["dedupe:", ...lines].join("\n");
+  return ["dedupe:", untrustedFence()(lines.join("\n"))].join("\n");
 }
 
 // Evidence dedup-by-(pr,quote): same precedent as cluster.ts's mergeEvidence.

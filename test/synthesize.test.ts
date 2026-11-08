@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { sanitize } from "../src/emitter/markers.js";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -575,7 +576,7 @@ test("Task 1: recurrence floor drops a single-PR CONTRIBUTOR rule but keeps its 
   expect(floored).toBeDefined();
   expect(floored!.droppedReason).toBe("recurrence-floor");
   expect(provenance.rules.some((r) => r.statement === "Rename temp variables to snake_case")).toBe(false);
-  expect(draft).not.toContain("Rename temp variables to snake_case");
+  expect(draft).not.toContain(sanitize("Rename temp variables to snake_case"));
 
   // Anti-vacuous twin #1: a 1-PR OWNER rule survives — maintainer-tier evidence exempts it.
   const ownerRule = provenance.rules.find((r) => r.statement === "Store secrets in vault only");
@@ -765,7 +766,8 @@ test("Task 3: same norm filed under two different categories merges into one rul
         return { mergeSets: [{ ids: [0, 1] }] } as T;
       }
       // cluster call: one singleton group per bucket (one candidate per bucket here)
-      return { groups: [{ memberIndexes: [0], canonicalStatement: prompt.replace(/^\[0\]\s*/, "").replace(/ \(prescriptive\)$/, "") }] } as T;
+      const line = prompt.split("\n").find((l) => l.startsWith("[0]"))!;
+      return { groups: [{ memberIndexes: [0], canonicalStatement: line.replace(/^\[0\]\s*/, "").replace(/ \(prescriptive\)$/, "") }] } as T;
     },
   };
 
@@ -789,8 +791,8 @@ test("Task 3: same norm filed under two different categories merges into one rul
   expect(new Set(kept.evidence.map((e) => e.pr))).toEqual(new Set([20, 21]));
 
   // The absorbed rule's statement never renders on its own; the kept statement does.
-  expect(draft).toContain(TTY_STYLE_STATEMENT);
-  expect(draft).not.toContain(TTY_PROCESS_STATEMENT);
+  expect(draft).toContain(sanitize(TTY_STYLE_STATEMENT));
+  expect(draft).not.toContain(sanitize(TTY_PROCESS_STATEMENT));
 
   // provider economy: 2 non-empty buckets (style, process) + reconcile + dedup + plan
   expect(calls).toBe(5);
@@ -883,8 +885,8 @@ test("Fix: a merge between a synthetic code-only rule and a weak single-PR rule 
   // carries a live PR-evidence path that COULD have won had it been stronger.
   expect(kept.score).toBeCloseTo(0.5, 4);
 
-  expect(draft).toContain(SYNTH_MERGE_PR_STATEMENT); // kept member's own statement renders
-  expect(draft).not.toContain(SYNTH_MERGE_PATTERN_STATEMENT); // absorbed synthetic's statement does not
+  expect(draft).toContain(sanitize(SYNTH_MERGE_PR_STATEMENT)); // kept member's own statement renders
+  expect(draft).not.toContain(sanitize(SYNTH_MERGE_PATTERN_STATEMENT)); // absorbed synthetic's statement does not
 });
 
 // ---- v0.3 Task 4: tiered rendering (maxRules + compact tail) ----------------

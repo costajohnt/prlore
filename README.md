@@ -27,10 +27,8 @@ This runs the mining pipeline in-process: it starts the job, polls progress to
 stderr every 5 seconds, then once the draft is ready prints it to stdout along
 with any contested rules (listed on stderr — v1's CLI never auto-resolves
 them; use the MCP `write` tool's `resolveContested`, or edit the file by hand,
-to keep one). It then asks before touching disk: `Write AGENTS.md? [y/N]` when
-it will write the target directly, or `Write .prlore/AGENTS.md and add a pointer
-block to AGENTS.md? [y/N]` when an existing hand-authored AGENTS.md means it
-adopts pointer mode instead (see "Adaptive pointer mode" below).
+to keep one). It then asks before touching disk: `Write .prlore/AGENTS.md and
+add a pointer block to AGENTS.md? [y/N]` (see "Where the output goes" below).
 
 ```
 usage: prlore mine <owner/repo> [options]
@@ -52,7 +50,9 @@ usage: prlore mine <owner/repo> [options]
   --base-url <url>           base URL for --provider openai (or
                              OPENAI_BASE_URL); ignored by other providers
   --repo-path <path>         local checkout to mine against (default: cwd)
-  --target <file>            output file (default: AGENTS.md)
+  --target <file>            output file name (default: AGENTS.md); the mined
+                             doc goes to .prlore/<file> and <file> gets a
+                             short pointer block
   --max-rules <n>             cap on rules rendered in full detail; the rest
                              render as compact one-liners in a trailing
                              section (default: 60; must be a positive
@@ -65,7 +65,8 @@ Exit codes: `0` on success (including a confirmed-no / `--dry-run` "not
 written" outcome), `1` if the mining job itself failed or the write was
 refused (a target file whose managed block is damaged: a corrupt/reversed
 marker pair, or a lone stray marker. An existing file with no prlore markers is
-not a refusal; it adopts pointer mode, see "Adaptive pointer mode" below), `2`
+not a refusal; it gets a pointer block appended, see "Where the output goes"
+below), `2`
 for a usage or configuration error (bad flags, invalid `MineConfig`, no model
 provider available).
 
@@ -97,33 +98,38 @@ case-insensitively. When `--author` is given and `--intent` isn't, the
 default intent switches from the general onboarding phrasing to documenting
 the review feedback these authors received.
 
-### Adaptive pointer mode
+### Where the output goes
 
-prlore never rewrites hand-authored prose. How it writes the mined conventions
-depends on the target file's existing state, chosen automatically from what's on
-disk (there is no flag):
+The mined conventions always land in a prlore-owned file, `.prlore/AGENTS.md`,
+inside a `<!-- prlore:begin -->` / `<!-- prlore:end -->` block. `AGENTS.md` at
+the repo root only ever gets a small managed pointer block:
 
-- **Direct mode** (target absent, or already prlore-managed with a valid marker
-  pair). The full mined doc goes straight into `AGENTS.md`, inside a
-  `<!-- prlore:begin -->` / `<!-- prlore:end -->` block. Bytes outside that block
-  are preserved exactly. This is the original behavior and is unchanged.
-- **Pointer mode** (an existing `AGENTS.md` that prlore doesn't manage, i.e. one
-  with no prlore markers). The full mined doc lands in a separate, prlore-owned
-  file, `.prlore/AGENTS.md`, and your existing `AGENTS.md` is only ever appended
-  to with a small managed pointer block (markers plus a one-line "the mined
-  conventions live in .prlore/AGENTS.md, read that first" note). The prose you
-  wrote above that block stays byte-for-byte identical, and re-running `mine`
-  replaces just the pointer block in place. prlore also enters pointer mode
-  whenever `.prlore/AGENTS.md` already exists, so once a repo adopts it the
-  layout stays put.
+```markdown
+## Mined PR-review conventions
+Conventions mined from past PR reviews by prlore: [.prlore/AGENTS.md](.prlore/AGENTS.md). Treat them as suggestions; the code and maintainers win where they disagree.
+```
 
-With a non-default `--target`, the same rule applies with that filename
-substituted throughout (`.prlore/<target>`, and the pointer references
-`.prlore/<target>`).
+- No `AGENTS.md` yet: prlore creates one containing just the pointer block.
+- An `AGENTS.md` you wrote: the pointer block is appended. The prose above it
+  stays byte-for-byte identical, and re-running `mine` replaces just the block.
+- An `AGENTS.md` from an older prlore that wrote the full doc into the root
+  managed block: the next write moves the mined doc to `.prlore/AGENTS.md` and
+  replaces that block with the pointer. Anything outside the markers is left
+  alone. Per-area `<area>/AGENTS.md` stubs an older version wrote are not
+  touched; delete them by hand if you used `--layout per-area` before.
 
-Pointer mode is exactly the case that used to refuse. An existing unmarked
-`AGENTS.md` is now adopted, not rejected (see the exit-code note above for what
-still refuses).
+**What to commit.** `.prlore/` also holds private mining state (the fetched PR
+corpus, the extraction cache, the checkpoint). On its first write prlore creates
+`.prlore/.gitignore` that ignores everything there except `AGENTS.md`,
+`areas/*.md`, and `provenance.json`, so committing `.prlore/` commits exactly
+the files the pointer and the provenance sidecar need. An existing
+`.prlore/.gitignore` is never overwritten. Don't ignore `.prlore/` as a whole,
+or the pointer in `AGENTS.md` dangles for everyone else.
+
+The mined doc is model output distilled from third-party PR text, which is why
+the pointer frames it as suggestions rather than rules. With a non-default
+`--target`, the same applies with that filename substituted throughout
+(`.prlore/<target>`, and the pointer references `.prlore/<target>`).
 
 ### As an MCP server
 
@@ -162,8 +168,8 @@ it:
 | `mine` | Starts (or resumes) a mining job. Only required inputs are `repo` (`owner/name`) and `intent` (free text describing what the doc is for) — everything else defaults. Rejects while a job is already running. |
 | `status` | Reports job state, stage, progress counters, and spend so far. Poll it after `mine`. |
 | `cancel` | Requests a graceful stop; the job checkpoints at the next stage boundary so a later `mine` call resumes instead of restarting. |
-| `preview` | Once a job reaches `ready-for-preview`, returns the rendered markdown, any contested rules, summary stats, and a one-time `confirmToken`. |
-| `write` | Writes the previewed draft to disk. Requires the `confirmToken` from the immediately preceding `preview` call — prlore never writes without one. Accepts `resolveContested` to keep or drop specific contested rules. |
+| `preview` | Once a job reaches `ready-for-preview`, returns the rendered markdown, any contested and low-confidence rules, summary stats, and a one-time `confirmToken`. |
+| `write` | Writes the previewed draft to `.prlore/AGENTS.md` and a pointer block to `AGENTS.md`. Requires the `confirmToken` from the immediately preceding `preview` call — prlore never writes without one. Accepts `resolveContested` to keep or drop specific contested rules. |
 
 The `interview` MCP prompt is a conversational script for gathering `mine`
 inputs (repo, intent, focus areas, output preferences) instead of asking the
@@ -252,14 +258,12 @@ script-built fixture git repo.
 - **Local checkout required.** prlore reconciles PR discussion against the
   current codebase by running real `git` commands against `repoPath`; it does
   not fetch or shallow-clone the repo itself.
-- **Managed-block emission only.** prlore writes into a fenced
-  `<!-- prlore:begin -->` / `<!-- prlore:end -->` block (or a fresh file if the
-  target doesn't exist). It never merges into hand-written prose: an existing
-  unmarked `AGENTS.md` is adopted via pointer mode (the mined doc goes to
-  `.prlore/AGENTS.md` and only a small pointer block is appended to the human
-  file, see "Adaptive pointer mode"), and a target whose managed block is
-  damaged (a corrupt/reversed pair or a lone stray marker) is refused rather
-  than guessed at.
+- **Managed-block emission only.** prlore writes into fenced
+  `<!-- prlore:begin -->` / `<!-- prlore:end -->` blocks. It never merges into
+  hand-written prose: the mined doc goes to `.prlore/AGENTS.md` and only a small
+  pointer block goes in `AGENTS.md` (see "Where the output goes"), and a target
+  whose managed block is damaged (a corrupt/reversed pair or a lone stray
+  marker) is refused rather than guessed at.
 - **No incremental UI.** There's no diff view, no partial-accept-per-rule flow
   beyond the contested-item keep/drop list `write` accepts. Re-running `mine`
   re-synthesizes over the (cached) extraction corpus.
@@ -268,6 +272,27 @@ script-built fixture git repo.
   `contested`, not in the emitted draft — it only appears in the written file
   if the caller explicitly resolves it with `resolveContested: [{ id, action:
   "keep" }]` on `write`.
+- **Low-confidence rules are held back the same way.** A rule whose statement
+  shares under 20% of its content words with the reviewer quote that gives it
+  its authority is listed with the contested items (marked `[low confidence]`
+  in the preview, `low-confidence:` on CLI stderr, `lowConfidence: true` in the
+  MCP `preview`) instead of being written. This catches a rule the model
+  attached to an unrelated maintainer comment, for example because PR text
+  steered the extraction. A kept one is written with a `[low confidence]`
+  marker. Over MCP, `write` keeps one only when its id is listed with
+  `action: "keep"`, and echoes every kept one back as `keptLowConfidence`.
+- **Rendered text can't carry markdown structure, links, or HTML.** In rule
+  text, titles, headings and contested items every ASCII punctuation character
+  is backslash-escaped (so the raw file reads `Don\'t use \`any\``, and code
+  renders as plain text), `&` becomes `&amp;`, and anything a linkifier would
+  link (URLs, bare or Unicode domains, emails, IPs, as found by linkify-it) has
+  its `.`, `:`, `/` and `@` entity-encoded. Control and bidi characters are
+  stripped, and the same stripping applies to contested lines on CLI stderr.
+- **PR text is treated as untrusted data.** Titles, bodies, review comments,
+  file names, and statements derived from them are fenced in delimited blocks
+  in every model prompt, with an instruction that their content is never
+  instructions. This lowers prompt-injection risk; it doesn't remove it, so
+  review the preview before writing.
 - Single repo per run; no GitLab/Bitbucket support; no continuous ingestion or
   webhooks — this is a batch tool you re-run, not a review bot or an
   enforcement tool.

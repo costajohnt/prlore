@@ -8,6 +8,7 @@ import { MONTH_MS } from "../util/time.js";
 import { HIGH_AUTHORITY } from "./authority.js";
 import type { Cluster } from "./cluster.js";
 import { scoreRule } from "./score.js";
+import { UNTRUSTED_DATA_RULE, untrustedFence } from "../util/untrusted.js";
 
 export type ReconciledRule = Omit<Cluster, "id"> & {
   id: number | string;
@@ -47,7 +48,9 @@ corroborated, trending-toward, unobservable, trending-away, contradicted-stable.
 claim concerns a specific token that can be searched for in the codebase (an API name, function,
 import, config key, etc.), supply probeToken (the exact token to search for) and probeExpectation:
 "presence-supports" if the token's presence in the code supports the claim, "presence-contradicts"
-if the claim asserts the token should NOT appear. Respond with ONLY JSON matching the schema.`;
+if the claim asserts the token should NOT appear. Respond with ONLY JSON matching the schema.
+
+${UNTRUSTED_DATA_RULE}`;
 
 const CONTESTED_SCORE_THRESHOLD = 0.3;
 
@@ -59,7 +62,7 @@ function buildPrompt(clusters: Cluster[], patterns: PatternsModel): string {
     (m) => `${m.from} -> ${m.to} (${m.status}, ${m.evidence.trend})`,
   );
   const clusterLines = clusters.map((c) => `[${c.id}] ${c.statement} (${c.polarity}, ${c.category})`);
-  return [metaLine, ...areaLines, ...patternLines, ...migrationLines, "", ...clusterLines].join("\n");
+  return [metaLine, ...areaLines, ...patternLines, ...migrationLines, "", untrustedFence()(clusterLines.join("\n"))].join("\n");
 }
 
 function hasRecentHighAuthorityEvidence(evidence: EvidenceRecord[], now: number): boolean {

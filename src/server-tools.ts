@@ -5,7 +5,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { makeTransport, resolveToken, withRetry } from "./github/client.js";
 import { emitDraft, EmitRefusedError, isConfinedOnDisk, type EmitTarget } from "./emitter/emit.js";
 import { finalizeDraft } from "./emitter/finalize.js";
-import { previewEmitMode, writePlanSummary } from "./emitter/mode.js";
+import { sanitize } from "./emitter/markers.js";
+import { previewWrite, writePlanSummary } from "./emitter/mode.js";
 import type { JobDeps, JobManagerApi } from "./jobs/manager.js";
 import { hasClaudeCli, selectProvider } from "./model/select-provider.js";
 import { MineConfigSchema, type MineConfig } from "./schemas/mine-config.js";
@@ -147,7 +148,7 @@ export function registerTools(
     "preview",
     {
       description:
-        "Preview the draft a completed mining job produced. Requires the job to be ready-for-preview. Issues a confirmToken that `write` must echo back — the only way to actually write files.",
+        "Preview the draft a completed mining job produced. Requires the job to be ready-for-preview. Issues a confirmToken that `write` must echo back — the only way to actually write files. `contested` lists rules that need a human keep/drop call, including low-confidence rules (lowConfidence: true) whose statement is poorly supported by the reviewer quote it cites.",
       inputSchema: { jobId: z.string().optional() },
     },
     async ({ jobId }) => {
@@ -173,31 +174,51 @@ export function registerTools(
           contested: result.contested,
         };
 
-        // Read-only preview of which mode `write` will run (direct vs pointer)
-        // and whether it would refuse. An unmarked human `<target>` now ADOPTS
-        // pointer mode (full doc → .prlore/<target>, a pointer block appended to
-        // the human file) rather than refusing; only corrupt/lone markers, or an
-        // unmarked/corrupt `.prlore/<target>`, still refuse. writePlan tells the
-        // caller in one line what will actually happen.
-        const modePreview = await previewEmitMode(lastMineTarget.repoPath, lastMineTarget.target);
-        const writePlan = modePreview.wouldRefuse
-          ? `would refuse to write ${lastMineTarget.target}: ${modePreview.reason ?? "corrupt managed-block markers"}`
-          : writePlanSummary(modePreview.mode, lastMineTarget.target);
+        // Read-only preview of whether `write` would refuse. `write` always puts
+        // the full doc in .prlore/<target> and only a pointer block in
+        // <target>; only corrupt/lone markers, or an unmarked/corrupt
+        // `.prlore/<target>`, refuse. writePlan tells the caller in one line
+        // what will actually happen.
+        const writePreview = await previewWrite(lastMineTarget.repoPath, lastMineTarget.target);
+        const writePlan = writePreview.wouldRefuse
+          ? `would refuse to write ${lastMineTarget.target}: ${writePreview.reason ?? "corrupt managed-block markers"}`
+          : writePlanSummary(writePreview, lastMineTarget.target);
+
+        // Contested text is model output derived from PR text and goes straight
+        // into the host agent's context: sanitize it the same way the rendered
+        // doc is (quotes included).
+        const contested = result.contested.map((c) => ({
+          ...c,
+          statement: sanitize(c.statement),
+          reason: sanitize(c.reason),
+          sides: c.sides.map((side) => ({
+            statement: sanitize(side.statement),
+            evidence: side.evidence.map((e) => ({ ...e, quote: sanitize(e.quote) })),
+          })),
+        }));
+        const lowConfidenceCount = contested.filter((c) => c.lowConfidence).length;
 
         return jsonContent({
           markdown: result.draft,
-          contested: result.contested,
+          contested,
+          ...(lowConfidenceCount > 0
+            ? {
+                lowConfidenceNote:
+                  `${lowConfidenceCount} low-confidence item(s) are left out of the write. Keep one only if the user ` +
+                  `explicitly asks to: list its id with action "keep" in write's resolveContested. Every kept ` +
+                  "low-confidence item is echoed back in the write result as keptLowConfidence.",
+              }
+            : {}),
           stats: {
             rulesIncluded: result.provenance.rules.length,
             droppedCount: result.provenance.dropped.length,
             contestedCount: result.contested.length,
           },
           confirmToken: token,
-          targetExists: modePreview.targetExists,
-          wouldRefuse: modePreview.wouldRefuse,
-          mode: modePreview.mode,
+          targetExists: writePreview.targetExists,
+          wouldRefuse: writePreview.wouldRefuse,
           writePlan,
-          ...(modePreview.reason ? { refusalReason: modePreview.reason } : {}),
+          ...(writePreview.reason ? { refusalReason: writePreview.reason } : {}),
         });
       } catch (err) {
         return toolError(err);
@@ -209,7 +230,7 @@ export function registerTools(
     "write",
     {
       description:
-        "Write the previewed draft to disk. Requires the confirmToken from the most recent `preview` call — write never touches disk without one.",
+        "Write the previewed draft to disk: the mined doc to .prlore/<target>, and only a pointer block to <target> (appended to existing prose, never rewriting it). Requires the confirmToken from the most recent `preview` call — write never touches disk without one. Contested and low-confidence items are left out unless resolveContested marks them keep; ask the user before keeping one.",
       inputSchema: {
         confirmToken: z.string(),
         resolveContested: z.array(z.object({ id: z.string(), action: z.enum(["keep", "drop"]) })).optional(),
@@ -242,11 +263,7 @@ export function registerTools(
         // item) — filtering the full contested list against the keep-id set
         // already covers every occurrence, not just the first.
         const keepIds = new Set((resolveContested ?? []).filter((r) => r.action === "keep").map((r) => r.id));
-        const resolvedStatements = contested
-          .filter((item) => keepIds.has(item.id))
-          .map((item) => item.statement);
-
-        const finalDraft = finalizeDraft(draft, resolvedStatements);
+        const finalDraft = finalizeDraft(draft, contested.filter((item) => keepIds.has(item.id)));
 
         let result;
         try {
@@ -256,7 +273,12 @@ export function registerTools(
           throw err;
         }
 
-        return jsonContent({ pathsWritten: result.pathsWritten });
+        // Echo kept low-confidence items so the user sees exactly what the host
+        // agent chose to promote into the written file.
+        const keptLowConfidence = contested
+          .filter((item) => item.lowConfidence && keepIds.has(item.id))
+          .map((item) => ({ id: item.id, statement: sanitize(item.statement) }));
+        return jsonContent({ pathsWritten: result.pathsWritten, keptLowConfidence });
       } catch (err) {
         return toolError(err);
       }
@@ -270,7 +292,7 @@ export function registerTools(
     "1. Repo: which GitHub repo to mine, as `owner/name`.",
     "2. Intent: in their own words, why they want this (free text) — what should the resulting conventions doc help with?",
     "3. Focus areas (optional): specific directories, subsystems, or topics to prioritize. Empty is fine — it means \"everything\".",
-    "4. Output preferences (optional): target file path (default AGENTS.md), layout (single file vs. per-area vs. auto), and whether citations should be inline or sidecar-only.",
+    "4. Output preferences (optional): target file name (default AGENTS.md; prlore writes the mined doc to .prlore/<target> and adds a pointer block to <target>), layout (single file vs. per-area vs. auto), and whether citations should be inline or sidecar-only.",
     "5. Budget/model preferences (optional): a max USD budget for the run and which model to use, if they care to set either.",
     "",
     "Once you have at least the repo and the intent, call the `mine` tool with everything gathered. Do not fabricate answers for fields the user didn't give you — omit them and let prlore's defaults apply.",

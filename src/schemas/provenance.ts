@@ -71,6 +71,10 @@ export const ContestedItemSchema = z.object({
   statement: z.string(),
   reason: z.string(),
   sides: z.array(z.object({ statement: z.string(), evidence: z.array(EvidenceRecordSchema) })),
+  // Additive, optional: set when the item is not a disagreement but a rule whose
+  // statement is poorly supported by its cited quotes (verify-evidence.ts
+  // isLowConfidence). Same keep/drop handling as any contested item.
+  lowConfidence: z.literal(true).optional(),
 });
 export type ContestedItem = z.infer<typeof ContestedItemSchema>;
 

@@ -26,19 +26,25 @@ import { sanitize } from "./markers.js";
 // keep the header plus every unresolved contested bullet ahead of the
 // poisoned one. Built from render.ts's CONTESTED_HEADER constant rather than
 // a second hardcoded literal, so the two can't drift apart.
-const CONTESTED_HEADER_LINE = new RegExp(`^## ${CONTESTED_HEADER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m");
+const CONTESTED_HEADER_LINE = new RegExp(`^## ${CONTESTED_HEADER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "gm");
 
 // Strips the contested section (everything from the "Needs your call" header
 // onward — unresolved contested items stay preview-only, never written) and, for
 // any items the caller resolved "keep", appends a "Resolved" section ahead of that
 // cut point. v1-simple per the plan: no re-render, just string surgery on the
 // already-rendered draft.
-export function finalizeDraft(draft: string, resolvedStatements: string[]): string {
-  const match = CONTESTED_HEADER_LINE.exec(draft);
+export function finalizeDraft(draft: string, resolved: { statement: string; lowConfidence?: true }[]): string {
+  // The LAST full-line match: render.ts emits the genuine header once, after
+  // every other section, and only "- " bullets follow it. sanitize() also
+  // escapes a leading "#" in every field, so a look-alike earlier in the doc
+  // (e.g. an overview equal to the header) can't truncate the written file.
+  const match = [...draft.matchAll(CONTESTED_HEADER_LINE)].at(-1) ?? null;
   const base = (match === null ? draft : draft.slice(0, match.index)).replace(/\n+$/, "");
   const withResolved =
-    resolvedStatements.length === 0
+    resolved.length === 0
       ? base
-      : `${base}\n\n## Resolved\n${resolvedStatements.map((s) => `- **${sanitize(s)}** _(resolved)_`).join("\n")}`;
+      : `${base}\n\n## Resolved\n${resolved
+          .map((r) => `- **${r.lowConfidence ? "[low confidence] " : ""}${sanitize(r.statement)}** _(resolved)_`)
+          .join("\n")}`;
   return `${withResolved.replace(/\n+$/, "")}\n`;
 }

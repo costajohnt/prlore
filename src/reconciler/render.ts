@@ -120,7 +120,8 @@ export function renderDraft(
   if (contested.length > 0) {
     lines.push(`## ${CONTESTED_HEADER}`);
     for (const item of contested) {
-      lines.push(`- ${sanitize(item.statement)} — ${sanitize(item.reason)}`);
+      const marker = item.lowConfidence ? "**[low confidence]** " : "";
+      lines.push(`- ${marker}${sanitize(item.statement)} — ${sanitize(item.reason)}`);
     }
   }
 
