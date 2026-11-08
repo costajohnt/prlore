@@ -37,7 +37,9 @@ export class Extractor {
   private readonly model: string;
   private readonly seen = new Set<string>();
   private readonly tasks: Promise<void>[] = [];
-  private readonly collected: CandidateLearning[] = [];
+  // Per PR, in completion order; drain() sorts by PR so candidates.json (and every
+  // cluster and rule id derived from it) does not depend on which extraction finished first.
+  private readonly collected: { pr: NormalizedPr; candidates: CandidateLearning[] }[] = [];
   private budgetExhausted = false;
   private drained: Promise<ExtractSummary> | null = null;
   private readonly summary: ExtractSummary = {
@@ -68,7 +70,7 @@ export class Extractor {
     const cached = await readCache(this.deps.stateDir, pr, this.model);
     if (cached) {
       this.summary.cacheHits++;
-      this.collected.push(...cached);
+      this.collected.push({ pr, candidates: cached });
       return;
     }
     if (this.budgetExhausted) {
@@ -84,7 +86,7 @@ export class Extractor {
           // cache write failure is non-fatal: results are still collected, just not cached
         }
         this.summary.extracted++;
-        this.collected.push(...candidates);
+        this.collected.push({ pr, candidates });
         return;
       } catch (err) {
         if (err instanceof BudgetExceededError) {
@@ -105,9 +107,13 @@ export class Extractor {
   drain(): Promise<ExtractSummary> {
     this.drained ??= (async () => {
       await Promise.all(this.tasks);
+      // PR number, then updatedAt; within a PR the model's (cached, so stable) order.
+      const ordered = [...this.collected]
+        .sort((a, b) => a.pr.number - b.pr.number || (a.pr.updatedAt < b.pr.updatedAt ? -1 : a.pr.updatedAt > b.pr.updatedAt ? 1 : 0))
+        .flatMap((c) => c.candidates);
       const path = join(this.deps.stateDir, "candidates.json");
-      await atomicWriteFile(path, JSON.stringify(this.collected, null, 2));
-      this.summary.candidates = this.collected.length;
+      await atomicWriteFile(path, JSON.stringify(ordered, null, 2));
+      this.summary.candidates = ordered.length;
       return this.summary;
     })();
     // Return a snapshot so callers can't mutate (or observe mutation of) internal state.

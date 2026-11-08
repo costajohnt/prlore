@@ -7,6 +7,8 @@ import { BudgetExceededError } from "../src/model/provider.js";
 import type { NormalizedPr } from "../src/schemas/normalized-pr.js";
 import { createLimiter } from "../src/extractor/pool.js";
 import { Extractor } from "../src/extractor/extractor.js";
+import { clusterCandidates } from "../src/reconciler/cluster.js";
+import { verifyEvidence } from "../src/reconciler/verify-evidence.js";
 
 function pr(number: number): NormalizedPr {
   return {
@@ -220,4 +222,54 @@ test("extractor respects the concurrency cap", async () => {
   for (let i = 10; i < 18; i++) x.enqueue(pr(i));
   await x.drain();
   expect(stats().maxInFlight).toBeLessThanOrEqual(2);
+});
+
+test("candidates.json and cluster ids do not depend on extraction completion order", async () => {
+  // mulberry32: a small seeded PRNG so each seed is a reproducible completion order.
+  const rng = (seed: number) => () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const prs = Array.from({ length: 8 }, (_, i) => pr(i + 1));
+  // One singleton cluster per line, so ids follow the order candidates reach clustering.
+  const clusterModel: ModelProvider = {
+    spentUsd: () => 0,
+    async complete<T>({ prompt }: CompleteOptions<T>): Promise<T> {
+      const lines = [...prompt.matchAll(/^\[(\d+)\] (.*) \((?:prescriptive|proscriptive)\)$/gm)];
+      return { groups: lines.map((m, i) => ({ memberIndexes: [i], canonicalStatement: m[2], generality: "repo-wide" })) } as T;
+    },
+  };
+
+  const runs: string[] = [];
+  for (const seed of [1, 2, 3, 4, 5]) {
+    const random = rng(seed);
+    const p: ModelProvider = {
+      spentUsd: () => 0,
+      async complete<T>({ prompt, schema }: CompleteOptions<T>): Promise<T> {
+        const n = Number(/^## PR #(\d+)/.exec(prompt)![1]);
+        await new Promise((r) => setTimeout(r, Math.floor(random() * 20)));
+        const quote = { author: "o", association: "OWNER", quote: "always do X", createdAt: "2026-01-01T00:00:00Z" };
+        return schema.parse({
+          learnings: [
+            { statement: `Rule ${n}a`, category: "style", polarity: "prescriptive", quotes: [quote] },
+            { statement: `Rule ${n}b`, category: "style", polarity: "prescriptive", quotes: [quote] },
+          ],
+        });
+      },
+    };
+    const stateDir = await dir();
+    const x = new Extractor({ provider: p, stateDir, concurrency: 4 });
+    for (const item of prs) x.enqueue(item);
+    await x.drain();
+    const candidates = JSON.parse(await readFile(join(stateDir, "candidates.json"), "utf8"));
+    const { clusters } = await clusterCandidates(verifyEvidence(candidates, prs), clusterModel);
+    runs.push(JSON.stringify(clusters.map((c) => [c.id, c.statement])));
+  }
+
+  expect(new Set(runs).size).toBe(1);
+  expect(JSON.parse(runs[0]!).map((r: [number, string]) => r[1])).toEqual(
+    prs.flatMap((item) => [`Rule ${item.number}a`, `Rule ${item.number}b`]),
+  );
 });
