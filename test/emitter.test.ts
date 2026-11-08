@@ -571,7 +571,8 @@ test("per-area layout skips an area directory that is a symlink out of the repo"
   await symlink(outside, join(repo, "lib"));
   const rules = [mkRule({ id: "1", scope: ["src/a.ts"] }), mkRule({ id: "2", scope: ["lib/b.ts"] })];
   const result = await emitDraft("# Conventions\n", mkProvenance(rules), { repoPath: repo, target: "AGENTS.md", layout: "per-area" });
+  // Area stubs live under .prlore/areas/, so a symlinked area dir is never written through.
   expect(result.pathsWritten).toContain(areaPath(repo, "src"));
-  expect(result.pathsWritten).not.toContain(areaPath(repo, "lib"));
+  expect(result.pathsWritten.some((p) => p.startsWith(join(repo, "lib")))).toBe(false);
   expect(await readdir(outside)).toEqual([]);
 });

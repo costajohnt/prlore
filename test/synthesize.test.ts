@@ -765,7 +765,8 @@ test("Task 3: same norm filed under two different categories merges into one rul
         return { mergeSets: [{ ids: [0, 1] }] } as T;
       }
       // cluster call: one singleton group per bucket (one candidate per bucket here)
-      return { groups: [{ memberIndexes: [0], canonicalStatement: prompt.replace(/^\[0\]\s*/, "").replace(/ \(prescriptive\)$/, "") }] } as T;
+      const line = prompt.split("\n").find((l) => l.startsWith("[0]"))!;
+      return { groups: [{ memberIndexes: [0], canonicalStatement: line.replace(/^\[0\]\s*/, "").replace(/ \(prescriptive\)$/, "") }] } as T;
     },
   };
 
