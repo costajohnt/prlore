@@ -284,8 +284,9 @@ script-built fixture git repo.
   changed PRs (the extraction cache covers the rest), and re-synthesizes.
   `--days N` slides with the clock, so PRs that age out of the window drop out
   of the doc, and only the newest `maxPrs` are used. The CLI prints a
-  `corpus:` line (PR count, newest PR update, how many were new or changed this
-  run), MCP `status` and `preview` return it as `corpus`, and `provenance.json`
+  `corpus:` line (PR count, newest PR update, how many are new or changed
+  since the last synthesis), MCP `status` and `preview` return it as
+  `corpus`, and `provenance.json`
   records it. A run that finds nothing new says so in a `corpus unchanged`
   warning. To refetch from scratch, delete `.prlore/checkpoint.json`; the
   extraction cache is kept.

@@ -306,7 +306,7 @@ export async function runMineCli(argv: string[], deps: CliDeps): Promise<number>
   if (corpus) {
     deps.stderr.write(
       `prlore: corpus: ${corpus.prs} PRs, newest updated ${corpus.newestUpdatedAt ?? "n/a"}, ` +
-        `${corpus.addedThisRun} new or changed this run\n`,
+        `${corpus.addedThisRun} new or changed since the last synthesis\n`,
     );
   }
 

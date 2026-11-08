@@ -123,6 +123,13 @@ export async function fetchCorpus(config: MineConfig, deps: FetchDeps): Promise<
     await saveCheckpoint(deps.stateDir, cp);
   }
   const refreshFrom = cp.refreshFrom ?? null;
+  // The pass re-reads PRs at the watermark's exact second (a PR updated in that second
+  // after the last pass's first page would otherwise be skipped forever), and an overflow
+  // refetch can already have stored a newer version; rows identical to the corpus are
+  // skipped so they don't count as new.
+  const stored = refreshFrom
+    ? new Set((await readCorpus(corpusPath)).prs.map((p) => `${p.number}|${p.updatedAt}`))
+    : new Set<string>();
 
   const ingest: IngestCounters = { botCommentsStripped: counter(cp, "botCommentsStripped") };
   // GitHub timestamps are always `Z`; normalize an explicit --since offset so the
@@ -145,8 +152,7 @@ export async function fetchCorpus(config: MineConfig, deps: FetchDeps): Promise<
       let sawTooOld = false;
       for (const node of res.repository.pullRequests.nodes) {
         if (counter(cp, "kept") >= maxPrs) break;
-        // ponytail: `<=` assumes no unseen PR shares the watermark's exact second.
-        if ((since && node.updatedAt < since) || (refreshFrom && node.updatedAt <= refreshFrom)) {
+        if ((since && node.updatedAt < since) || (refreshFrom && node.updatedAt < refreshFrom)) {
           sawTooOld = true;
           break;
         }
@@ -158,6 +164,10 @@ export async function fetchCorpus(config: MineConfig, deps: FetchDeps): Promise<
           // dedicated `droppedAuthor` counter for visibility into why.
           bump(cp, "dropped");
           bump(cp, "droppedAuthor");
+          continue;
+        }
+        if (result.kept && stored.has(`${result.pr.number}|${result.pr.updatedAt}`)) {
+          bump(cp, "unchanged");
           continue;
         }
         if (result.kept) {
@@ -202,9 +212,8 @@ export async function fetchCorpus(config: MineConfig, deps: FetchDeps): Promise<
         if (result.kept && authorMatches(result.pr.author, config.authors)) {
           await appendJsonl(corpusPath, result.pr);
           deps.onPr?.(result.pr);
-          // The refetch can carry a newer updatedAt than the page did; record it so the
-          // next incremental pass doesn't count this PR as changed again.
-          if (!cp.maxUpdatedAt || result.pr.updatedAt > cp.maxUpdatedAt) cp.maxUpdatedAt = result.pr.updatedAt;
+          // Never raise the watermark from a refetch: its updatedAt can postdate the first
+          // page, and PRs updated in between would sit below the watermark, unfetched.
         }
       }
       bump(cp, "overflowRefetched");

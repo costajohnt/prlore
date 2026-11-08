@@ -79,7 +79,7 @@ export const ContestedItemSchema = z.object({
 export type ContestedItem = z.infer<typeof ContestedItemSchema>;
 
 // Corpus freshness: how many PRs this doc was synthesized from, the newest PR
-// updatedAt among them, and how many were new or changed in this run's fetch.
+// updatedAt among them, and how many are new or changed since the last finished synthesis.
 export const CorpusInfoSchema = z.object({
   prs: z.number().int().nonnegative(),
   newestUpdatedAt: z.string().nullable(),

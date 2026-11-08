@@ -276,10 +276,13 @@ export class JobManager implements JobManagerApi {
     // windowCorpus re-applies since/maxPrs, since incremental re-runs grow the corpus.
     const prs = windowCorpus((await readCorpus(join(deps.stateDir, "corpus.jsonl"))).prs, config);
     for (const pr of prs) extractor.enqueue(pr);
+    // New or changed since the last finished synthesis, not just since this run's fetch
+    // started: a run that crashed after fetching left its PRs un-synthesized.
+    const synthesizedThrough = cpAfterFetch?.synthesizedThrough ?? null;
     const corpus: CorpusInfo = {
       prs: prs.length,
       newestUpdatedAt: prs.reduce<string | null>((max, p) => (!max || p.updatedAt > max ? p.updatedAt : max), null),
-      addedThisRun: fetchSummary.kept,
+      addedThisRun: prs.filter((p) => !synthesizedThrough || p.updatedAt > synthesizedThrough).length,
     };
     this.mergeStatus(job, { corpus });
     const extractSummary = await extractor.drain();
@@ -296,7 +299,7 @@ export class JobManager implements JobManagerApi {
     }
     if (extractSummary.prsSeen === 0) {
       warnings.push("no PRs processed — corpus empty or config too narrow");
-    } else if (fetchSummary.refreshedFrom !== null && fetchSummary.kept === 0) {
+    } else if (fetchSummary.refreshedFrom !== null && corpus.addedThisRun === 0) {
       warnings.push(
         `corpus unchanged: no PRs updated since ${fetchSummary.refreshedFrom}; re-synthesized over the existing ${prs.length} PR(s)`,
       );
@@ -346,6 +349,8 @@ export class JobManager implements JobManagerApi {
     // Only a run with no model failure (every fallback is reported as a warning) drops
     // the saved replies; otherwise a re-run retries just the calls that failed.
     if (synthResult.warnings.length === 0) await rm(synthesisCache, { recursive: true, force: true });
+    const cpDone = await loadCheckpoint(deps.stateDir, now);
+    if (cpDone) await saveCheckpoint(deps.stateDir, { ...cpDone, synthesizedThrough: corpus.newestUpdatedAt });
 
     // DECISION (finished-before-cancel semantics): there is no checkCancel() between
     // the synthesize() await above and this point. If cancel() sets cancelRequested
