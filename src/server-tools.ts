@@ -214,6 +214,7 @@ export function registerTools(
             droppedCount: result.provenance.dropped.length,
             contestedCount: result.contested.length,
           },
+          ...(result.provenance.corpus ? { corpus: result.provenance.corpus } : {}),
           confirmToken: token,
           targetExists: writePreview.targetExists,
           wouldRefuse: writePreview.wouldRefuse,

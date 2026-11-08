@@ -30,6 +30,8 @@ export interface FetchSummary {
   drifted: number;
   overflowRefetched: number;
   maxUpdatedAt: string | null;
+  /** Watermark of an incremental pass (null on a first fetch): only PRs updated after it were fetched. */
+  refreshedFrom: string | null;
 }
 
 const PR_FIELDS = `
@@ -112,6 +114,15 @@ export async function fetchCorpus(config: MineConfig, deps: FetchDeps): Promise<
   let cp = await loadCheckpoint(deps.stateDir);
   // JobManager normally resets before calling us; standalone callers get the same reset here.
   if (!cp || cp.configHash !== hash) cp = await resetState(deps.stateDir, hash);
+  if (cp.stage !== "fetching") {
+    // Re-run over an existing corpus: page newest-first again and stop at the previous
+    // pass's watermark, appending new and changed PRs (readCorpus dedups by number, last
+    // write wins; the extraction cache is keyed on updatedAt). Counters restart so `kept`
+    // is what this pass added and maxPrs caps this pass, not the corpus.
+    cp = { ...cp, stage: "fetching", cursor: null, refreshFrom: cp.maxUpdatedAt, counters: {} };
+    await saveCheckpoint(deps.stateDir, cp);
+  }
+  const refreshFrom = cp.refreshFrom ?? null;
 
   const ingest: IngestCounters = { botCommentsStripped: counter(cp, "botCommentsStripped") };
   // GitHub timestamps are always `Z`; normalize an explicit --since offset so the
@@ -134,7 +145,8 @@ export async function fetchCorpus(config: MineConfig, deps: FetchDeps): Promise<
       let sawTooOld = false;
       for (const node of res.repository.pullRequests.nodes) {
         if (counter(cp, "kept") >= maxPrs) break;
-        if (since && node.updatedAt < since) {
+        // ponytail: `<=` assumes no unseen PR shares the watermark's exact second.
+        if ((since && node.updatedAt < since) || (refreshFrom && node.updatedAt <= refreshFrom)) {
           sawTooOld = true;
           break;
         }
@@ -190,6 +202,9 @@ export async function fetchCorpus(config: MineConfig, deps: FetchDeps): Promise<
         if (result.kept && authorMatches(result.pr.author, config.authors)) {
           await appendJsonl(corpusPath, result.pr);
           deps.onPr?.(result.pr);
+          // The refetch can carry a newer updatedAt than the page did; record it so the
+          // next incremental pass doesn't count this PR as changed again.
+          if (!cp.maxUpdatedAt || result.pr.updatedAt > cp.maxUpdatedAt) cp.maxUpdatedAt = result.pr.updatedAt;
         }
       }
       bump(cp, "overflowRefetched");
@@ -215,5 +230,6 @@ export async function fetchCorpus(config: MineConfig, deps: FetchDeps): Promise<
     drifted,
     overflowRefetched: counter(cp, "overflowRefetched"),
     maxUpdatedAt: cp.maxUpdatedAt,
+    refreshedFrom: refreshFrom,
   };
 }

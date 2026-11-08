@@ -302,6 +302,13 @@ export async function runMineCli(argv: string[], deps: CliDeps): Promise<number>
     `prlore: ${result.provenance.rules.length} rules, ${result.provenance.dropped.length} dropped, ` +
       `${result.contested.length} contested, spent $${(status.tokensSpentUsd ?? 0).toFixed(2)}\n`,
   );
+  const corpus = result.provenance.corpus;
+  if (corpus) {
+    deps.stderr.write(
+      `prlore: corpus: ${corpus.prs} PRs, newest updated ${corpus.newestUpdatedAt ?? "n/a"}, ` +
+        `${corpus.addedThisRun} new or changed this run\n`,
+    );
+  }
 
   for (const w of status.warnings ?? []) deps.stderr.write(`warning: ${w}\n`);
   // A reconcile fallback means no probe ran and every rule is "unobservable": the preview
