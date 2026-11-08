@@ -1,4 +1,4 @@
-import { mkdtemp, readdir } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
@@ -141,4 +141,34 @@ test("prune() keeps only the saved replies this run used", async () => {
   expect(await readdir(dir)).toHaveLength(1);
   expect(await second.complete({ prompt: "a", schema })).toEqual({ answer: "a" });
   expect(innerCalls).toBe(2);
+});
+
+test("prune() leaves entries it does not own and reports a reply it cannot delete", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "prlore-cache-"));
+  const schema = z.object({ answer: z.string() });
+  const inner: ModelProvider = {
+    spentUsd: () => 0,
+    async complete<T>({ prompt }: CompleteOptions<T>): Promise<T> {
+      return { answer: prompt } as T;
+    },
+  };
+  await resumableProvider(inner, dir, "s").complete({ prompt: "old", schema });
+  const [oldReply] = await readdir(dir);
+  await mkdir(join(dir, "notes"));
+  await writeFile(join(dir, "README.txt"), "kept");
+  // A directory under an owned name: rm without `recursive` fails on it.
+  const stuck = `${"f".repeat(64)}.json`;
+  await mkdir(join(dir, stuck));
+
+  const warnings: string[] = [];
+  const run = resumableProvider(inner, dir, "s", (w) => warnings.push(w));
+  await run.complete({ prompt: "new", schema });
+  await expect(run.prune()).resolves.toBeUndefined();
+
+  const left = await readdir(dir);
+  expect(left).not.toContain(oldReply);
+  expect(left).toEqual(expect.arrayContaining(["notes", "README.txt", stuck]));
+  expect(left).toHaveLength(4); // notes, README.txt, the stuck entry, this run's reply
+  expect(warnings).toHaveLength(1);
+  expect(warnings[0]).toContain(stuck);
 });

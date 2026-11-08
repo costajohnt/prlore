@@ -6,6 +6,8 @@ import { atomicWriteFile } from "../state/atomic.js";
 
 // untrustedFence() adds a random suffix to every prompt's tag; drop it from the key.
 const FENCE_SUFFIX = /(untrusted_pr_data)_[0-9a-f]{12}/g;
+// The only entries this provider writes (atomicWriteFile's temp files aside).
+const OWNED = /^[0-9a-f]{64}\.json$/;
 
 /**
  * Saves every successful reply under `dir`, keyed on the prompt, so re-running after a
@@ -18,12 +20,20 @@ export function resumableProvider(
   inner: ModelProvider,
   dir: string,
   salt: string,
+  onWarn?: (msg: string) => void,
 ): ModelProvider & { prune(): Promise<void> } {
   const used = new Set<string>();
   return {
+    // Deletes only saved replies (OWNED names) this run did not use. Anything else in the
+    // dir is left alone, and a reply that can't be deleted is reported, never thrown:
+    // pruning is housekeeping and must not fail a finished synthesis.
     async prune() {
       const names = await readdir(dir).catch(() => [] as string[]);
-      await Promise.all(names.filter((n) => !used.has(n)).map((n) => rm(join(dir, n), { force: true })));
+      for (const name of names.filter((n) => OWNED.test(n) && !used.has(n))) {
+        await rm(join(dir, name)).catch((err: unknown) =>
+          onWarn?.(`could not prune synthesis cache entry ${name}: ${err instanceof Error ? err.message : String(err)}`),
+        );
+      }
     },
     spentUsd: () => inner.spentUsd(),
     ...(inner.capUsd ? { capUsd: () => inner.capUsd!() } : {}),

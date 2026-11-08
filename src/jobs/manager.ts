@@ -230,6 +230,7 @@ export class JobManager implements JobManagerApi {
       deps.provider,
       synthesisCache,
       `${config.model.provider}|${config.model.model ?? ""}`,
+      (w) => this.mergeStatus(job, { warnings: [...(job.status.warnings ?? []), w] }),
     );
 
     // Step 1: analyze() FIRST. Cheap, one LLM call — reserves budget before the
