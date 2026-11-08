@@ -93,7 +93,7 @@ function firstRationale(members: VerifiedCandidate[]): string | undefined {
   return undefined;
 }
 
-function majorityPolarity(members: VerifiedCandidate[]): "prescriptive" | "proscriptive" {
+function majorityPolarity(members: { polarity: Cluster["polarity"] }[]): Cluster["polarity"] {
   let prescriptive = 0;
   let proscriptive = 0;
   for (const m of members) {
@@ -169,8 +169,8 @@ function fallbackDraft(units: Unit[]): Draft {
 
 // Audit 2026-11-07 deep H2: one cluster call per bucket overflowed the 4096-token output
 // cap at roughly 100 groups. Buckets are now clustered in batches of CLUSTER_BATCH, then
-// the batch groups' canonical statements are clustered again (level 2) so the same norm
-// split across batches still merges.
+// the batch groups' canonical statements are clustered again (see draftLevels) so the
+// same norm split across batches still merges.
 export const CLUSTER_BATCH = 60;
 
 // What one cluster call sees: a statement and its polarity.
@@ -260,42 +260,43 @@ function partition(draft: Draft, size: number, units: Unit[]): Draft {
   return { groups, conflicts };
 }
 
-async function draftBucket(
-  bucket: VerifiedCandidate[],
+// Clusters `units`; when that took more than one call (batches, or halves of a batch
+// split after a truncated reply), units in different calls never met, so the resulting
+// groups' canonical statements are clustered again, recursively, and the members of
+// groups that merge are unioned. Each level has fewer units than the one below it.
+async function draftLevels(
+  units: Unit[],
   provider: ModelProvider,
   batchSize: number,
   onFallback: () => void,
 ): Promise<Draft> {
-  const units = bucket.map((c) => ({ statement: c.statement, polarity: c.polarity }));
-  const { draft: level1, calls } = await draftUnits(units, provider, batchSize, onFallback);
-  if (calls <= 1) return level1;
+  const { draft, calls } = await draftUnits(units, provider, batchSize, onFallback);
+  if (calls <= 1) return draft;
+  const lower = partition(draft, units.length, units);
+  // ponytail: if no call merged anything, another level would see the same batches, so
+  // stop; duplicates split across those batches stay separate (dedupe may still catch them).
+  if (lower.groups.length >= units.length) return lower;
 
-  // Level 2: candidates in different batches (including halves of a batch split after a
-  // truncated reply) never met, so cluster the level-1 groups' canonical statements and
-  // union the members of groups that merge.
-  // ponytail: two levels only; past batchSize^2 candidates in one category, groups that
-  // land in different level-2 batches stay separate (dedupe may still merge them).
-  const l1 = partition(level1, units.length, units);
-  const reps = l1.groups.map((g) => ({
+  const reps = lower.groups.map((g) => ({
     statement: g.canonicalStatement,
-    polarity: majorityPolarity(g.memberIndexes.map((i) => bucket[i]!)),
+    polarity: majorityPolarity(g.memberIndexes.map((i) => units[i]!)),
   }));
-  const l2 = partition((await draftUnits(reps, provider, batchSize, onFallback)).draft, reps.length, reps);
+  const upper = partition(await draftLevels(reps, provider, batchSize, onFallback), reps.length, reps);
 
   const repToGroup: number[] = [];
-  const groups: Group[] = l2.groups.map((g, gi) => {
+  const groups: Group[] = upper.groups.map((g, gi) => {
     for (const r of g.memberIndexes) repToGroup[r] = gi;
-    // A level-2 singleton keeps its level-1 statement and tag (made with full statements in view).
-    const only = g.memberIndexes.length === 1 ? l1.groups[g.memberIndexes[0]!]! : undefined;
+    // An upper singleton keeps its lower statement and tag (made with the members in view).
+    const only = g.memberIndexes.length === 1 ? lower.groups[g.memberIndexes[0]!]! : undefined;
     return {
-      memberIndexes: g.memberIndexes.flatMap((r) => l1.groups[r]!.memberIndexes),
+      memberIndexes: g.memberIndexes.flatMap((r) => lower.groups[r]!.memberIndexes),
       canonicalStatement: only?.canonicalStatement ?? g.canonicalStatement,
       generality: only ? only.generality : g.generality,
     };
   });
   const conflicts: [number, number][] = [
-    ...l2.conflicts,
-    ...l1.conflicts.map(([a, b]): [number, number] => [repToGroup[a]!, repToGroup[b]!]),
+    ...upper.conflicts,
+    ...lower.conflicts.map(([a, b]): [number, number] => [repToGroup[a]!, repToGroup[b]!]),
   ];
   return { groups, conflicts };
 }
@@ -322,7 +323,8 @@ export async function clusterCandidates(
     if (!bucket || bucket.length === 0) continue;
 
     let fellBack = false;
-    const draft = await draftBucket(bucket, provider, opts?.batchSize ?? CLUSTER_BATCH, () => {
+    const units = bucket.map((c) => ({ statement: c.statement, polarity: c.polarity }));
+    const draft = await draftLevels(units, provider, opts?.batchSize ?? CLUSTER_BATCH, () => {
       fellBack = true;
     });
     if (fellBack && opts?.counters) opts.counters.clusterFallbacks++;
